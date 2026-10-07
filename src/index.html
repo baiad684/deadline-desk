@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data: blob:">
+  <title>截止线</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark" data-icon="flag"></div>
+        <div><strong>截止线</strong><span>Deadline Desk</span></div>
+      </div>
+
+      <nav class="main-nav" aria-label="主导航">
+        <button class="nav-item active" data-page="today"><span data-icon="sun"></span><span>今天</span><span class="nav-count" id="todayCount">0</span></button>
+        <button class="nav-item" data-page="assignments"><span data-icon="book"></span><span>大作业</span><span class="nav-count" id="assignmentCount">0</span></button>
+        <button class="nav-item" data-page="activities"><span data-icon="ticket"></span><span>活动</span><span class="nav-count" id="activityCount">0</span></button>
+        <button class="nav-item" data-page="stats"><span data-icon="chart"></span><span>统计</span></button>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <button class="nav-item" data-page="settings"><span data-icon="settings"></span><span>设置</span></button>
+        <div class="storage-summary">
+          <span>本地数据</span>
+          <strong id="storageSummary">0 条记录 · 0 个附件</strong>
+        </div>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <label class="search-box" id="searchBox">
+          <span data-icon="search"></span>
+          <input id="searchInput" type="search" placeholder="搜索作业或活动" autocomplete="off">
+          <kbd>Ctrl K</kbd>
+        </label>
+        <div class="top-actions">
+          <button class="icon-button" id="notificationButton" title="通知状态"><span data-icon="bell"></span></button>
+        </div>
+      </header>
+
+      <div class="page-container">
+        <section class="page active" data-page-view="today">
+          <div class="page-heading">
+            <div><h1>今天要处理</h1><p id="todaySubtitle">正在读取本地数据...</p></div>
+            <div class="today-date"><strong id="currentDate"></strong><span id="currentWeekday"></span></div>
+          </div>
+          <div class="today-layout">
+            <section class="panel deadline-panel">
+              <header class="panel-header"><div><h2>临近截止</h2><span>今天及未来 7 天</span></div><button class="text-button" id="showAllButton">查看全部</button></header>
+              <div class="deadline-list" id="deadlineList"></div>
+            </section>
+            <aside class="side-stack">
+              <section class="panel">
+                <header class="panel-header"><div><h2>本周概览</h2><span>实时统计</span></div></header>
+                <div class="metric-grid">
+                  <div class="metric"><span>待完成</span><strong id="pendingMetric">0<small>项</small></strong></div>
+                  <div class="metric danger"><span>已逾期</span><strong id="overdueMetric">0<small>项</small></strong></div>
+                  <div class="metric"><span>进行中</span><strong id="progressMetric">0<small>项</small></strong></div>
+                  <div class="metric"><span>本周完成</span><strong id="weekDoneMetric">0<small>项</small></strong></div>
+                </div>
+              </section>
+              <section class="panel">
+                <header class="panel-header"><div><h2>未来 7 天</h2><span>截止分布</span></div></header>
+                <div class="week-strip" id="weekStrip"></div>
+              </section>
+              <section class="tip-panel"><span data-icon="bell"></span><div><strong>系统提醒</strong><p id="notificationSummary">应用在托盘运行时会检查到期事项。</p></div></section>
+            </aside>
+          </div>
+        </section>
+
+        <section class="page" data-page-view="assignments">
+          <div class="page-heading list-heading">
+            <div><h1>大作业</h1><p>集中管理课程任务、状态和要求附件。</p></div>
+            <button class="primary-button new-kind-button" data-kind="assignment"><span data-icon="plus"></span>新增大作业</button>
+          </div>
+          <div class="list-toolbar">
+            <div class="segmented" id="assignmentFilters">
+              <button class="active" data-filter="all">全部</button><button data-filter="not_started">未开始</button><button data-filter="in_progress">进行中</button><button data-filter="completed">已完成</button>
+            </div>
+            <span class="result-count" id="assignmentResultCount"></span>
+          </div>
+          <div class="item-table panel">
+            <div class="table-head"><span>课程 / 要求</span><span>类型</span><span>截止日期</span><span>状态</span><span></span></div>
+            <div id="assignmentList"></div>
+          </div>
+        </section>
+
+        <section class="page" data-page-view="activities">
+          <div class="page-heading list-heading">
+            <div><h1>活动</h1><p>记录已经决定参加的活动和报名截止日期。</p></div>
+            <button class="primary-button new-kind-button" data-kind="activity"><span data-icon="plus"></span>新增活动</button>
+          </div>
+          <div class="list-toolbar">
+            <div class="segmented" id="activityFilters">
+              <button class="active" data-filter="all">全部</button><button data-filter="not_completed">未完成</button><button data-filter="completed">已完成</button>
+            </div>
+            <span class="result-count" id="activityResultCount"></span>
+          </div>
+          <div class="item-table panel">
+            <div class="table-head activity"><span>活动名称</span><span>截止日期</span><span>状态</span><span></span></div>
+            <div id="activityList"></div>
+          </div>
+        </section>
+
+        <section class="page" data-page-view="stats">
+          <div class="page-heading"><div><h1>统计看板</h1><p>了解任务推进情况和活动完成率。</p></div></div>
+          <div class="stats-grid">
+            <section class="panel stats-panel">
+              <header class="panel-header"><div><h2>大作业进度</h2><span id="assignmentStatsCaption">暂无记录</span></div></header>
+              <div class="stats-content">
+                <div class="donut-wrap"><svg class="donut" viewBox="0 0 120 120"><circle class="donut-track" cx="60" cy="60" r="46"></circle><circle class="donut-value assignment-donut" cx="60" cy="60" r="46"></circle></svg><div><strong id="assignmentCompletionRate">0%</strong><span>完成率</span></div></div>
+                <div class="stats-legend"><div><i class="legend-dot not-started"></i><span>未开始</span><strong id="notStartedStat">0</strong></div><div><i class="legend-dot in-progress"></i><span>进行中</span><strong id="inProgressStat">0</strong></div><div><i class="legend-dot completed"></i><span>已完成</span><strong id="assignmentDoneStat">0</strong></div><div><i class="legend-dot overdue"></i><span>逾期未完成</span><strong id="assignmentOverdueStat">0</strong></div></div>
+              </div>
+            </section>
+            <section class="panel stats-panel">
+              <header class="panel-header"><div><h2>活动完成情况</h2><span id="activityStatsCaption">暂无记录</span></div></header>
+              <div class="stats-content">
+                <div class="donut-wrap"><svg class="donut" viewBox="0 0 120 120"><circle class="donut-track" cx="60" cy="60" r="46"></circle><circle class="donut-value activity-donut" cx="60" cy="60" r="46"></circle></svg><div><strong id="activityCompletionRate">0%</strong><span>完成率</span></div></div>
+                <div class="activity-numbers"><div><span>参加总数</span><strong id="activityTotalStat">0</strong></div><div><span>已完成</span><strong id="activityDoneStat">0</strong></div><div><span>未完成</span><strong id="activityPendingStat">0</strong></div></div>
+              </div>
+            </section>
+            <section class="panel overview-panel">
+              <header class="panel-header"><div><h2>截止风险</h2><span>需要优先留意的事项</span></div></header>
+              <div class="risk-list" id="riskList"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="page" data-page-view="settings">
+          <div class="page-heading"><div><h1>设置</h1><p>管理通知、本地数据和备份。</p></div></div>
+          <div class="settings-layout">
+            <section class="settings-group panel">
+              <header class="panel-header"><div><h2>提醒</h2><span>Windows 系统通知</span></div></header>
+              <div class="setting-row"><div><strong>截止日期通知</strong><p>逾期、今天到期或 7 天内到期时，每个事项每天最多提醒一次。</p></div><label class="switch"><input type="checkbox" id="notificationToggle"><span></span></label></div>
+              <div class="setting-note"><span data-icon="info"></span><p>关闭主窗口后应用会驻留系统托盘并继续检查。彻底退出应用后不会发送通知；本版本不支持开机自动启动。</p></div>
+            </section>
+            <section class="settings-group panel">
+              <header class="panel-header"><div><h2>桌面小组件</h2><span>常驻桌面的截止提醒</span></div></header>
+              <div class="setting-row"><div><strong>显示桌面小组件</strong><p>在桌面显示一个置顶小卡片，展示未来 7 天内到期的未完成事项，数据实时同步。</p></div><label class="switch"><input type="checkbox" id="widgetToggle"><span></span></label></div>
+              <div class="setting-note"><span data-icon="info"></span><p>小组件独立于主窗口；按住卡片空白处可拖动，位置会自动记住。点击卡片条目可回到主窗口。</p></div>
+            </section>
+            <section class="settings-group panel">
+              <header class="panel-header"><div><h2>备份与恢复</h2><span>数据库和全部附件</span></div></header>
+              <div class="setting-action"><div><strong>导出备份</strong><p>生成带日期时间的新备份文件，不覆盖以前的备份。</p></div><button class="secondary-button" id="backupButton"><span data-icon="download"></span>导出备份</button></div>
+              <div class="setting-action"><div><strong>从备份恢复</strong><p>选择备份文件后，用其中的数据和附件覆盖当前内容。</p></div><button class="secondary-button" id="restoreButton"><span data-icon="upload"></span>恢复数据</button></div>
+            </section>
+            <section class="settings-group panel">
+              <header class="panel-header"><div><h2>本地数据</h2><span>仅保存在这台电脑</span></div></header>
+              <div class="data-path"><span data-icon="folder"></span><div><strong>应用数据目录</strong><code id="dataPath">正在读取...</code></div><button class="icon-button" id="openDataFolderButton" title="打开数据目录"><span data-icon="external"></span></button></div>
+              <div class="danger-zone"><div><strong>清空全部数据</strong><p>永久删除所有事项和附件，此操作只能通过已有备份恢复。</p></div><button class="danger-button" id="clearDataButton"><span data-icon="trash"></span>清空数据</button></div>
+            </section>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div class="modal-backdrop" id="itemModal" aria-hidden="true">
+    <form class="modal" id="itemForm">
+      <header class="modal-header"><div><h2 id="itemModalTitle">新增事项</h2><p id="itemModalSubtitle">记录一个新的截止日期</p></div><button type="button" class="icon-button modal-close" title="关闭"><span data-icon="close"></span></button></header>
+      <div class="modal-body">
+        <input type="hidden" id="itemId">
+        <div class="form-row form-row-kind">
+          <label>事项类型</label>
+          <div class="segmented kind-segment"><button type="button" class="active" data-kind="assignment"><span data-icon="book"></span>大作业</button><button type="button" data-kind="activity"><span data-icon="ticket"></span>活动</button></div>
+        </div>
+        <div class="form-grid">
+          <label class="field full"><span id="titleLabel">课程名称</span><input id="itemTitle" maxlength="120" required placeholder="例如：数据库课程设计"></label>
+          <label class="field full"><span>要求说明 <small>选填</small></span><textarea id="itemDescription" maxlength="10000" rows="4" placeholder="记录需要完成的内容"></textarea></label>
+          <label class="field"><span>截止日期</span><input id="itemDeadline" type="date" required></label>
+          <label class="field assignment-only"><span>作业类型</span><select id="itemWorkType"><option value="personal">个人</option><option value="team">团队</option></select></label>
+          <label class="field"><span>状态</span><select id="itemStatus"></select></label>
+        </div>
+        <div class="attachment-section assignment-only">
+          <div class="attachment-heading"><div><strong>要求附件</strong><span>图片、PDF、Word 或 PPT；单文件不超过 50MB</span></div><button type="button" class="secondary-button" id="selectAttachmentButton"><span data-icon="paperclip"></span>选择文件</button></div>
+          <div class="attachment-list" id="attachmentList"><div class="attachment-empty">尚未选择附件</div></div>
+        </div>
+      </div>
+      <footer class="modal-footer"><button type="button" class="secondary-button modal-close">取消</button><button type="submit" class="primary-button" id="saveItemButton"><span data-icon="check"></span>保存事项</button></footer>
+    </form>
+  </div>
+
+  <div class="modal-backdrop" id="dayItemsModal" aria-hidden="true">
+    <div class="day-items-dialog">
+      <header class="modal-header"><div><h2 id="dayItemsTitle">当天待办</h2><p id="dayItemsSubtitle"></p></div><button type="button" class="icon-button day-items-close" title="关闭"><span data-icon="close"></span></button></header>
+      <div class="day-items-list" id="dayItemsList"></div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop detail-backdrop" id="itemDetailModal" aria-hidden="true">
+    <div class="item-detail-dialog">
+      <header class="modal-header"><button type="button" class="icon-button" id="detailBackButton" title="返回当天待办"><span data-icon="left"></span></button><div><h2 id="detailTitle">事项详情</h2><p id="detailSubtitle"></p></div><button type="button" class="icon-button detail-close" title="关闭"><span data-icon="close"></span></button></header>
+      <div class="item-detail-body" id="itemDetailBody"></div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="confirmModal" aria-hidden="true">
+    <div class="confirm-dialog">
+      <div class="confirm-icon" id="confirmIcon"><span data-icon="warning"></span></div>
+      <h2 id="confirmTitle">确认操作</h2><p id="confirmMessage"></p>
+      <div class="confirm-actions"><button class="secondary-button" id="confirmCancel">取消</button><button class="danger-button" id="confirmAccept">确认</button></div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"><span class="toast-icon" data-icon="check"></span><span id="toastText"></span></div>
+  <script src="renderer.js"></script>
+</body>
+</html>

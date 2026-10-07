@@ -1,0 +1,58 @@
+{
+  "name": "deadline-desk",
+  "version": "1.0.0",
+  "description": "截止线 - 本地截止日期桌面工作台",
+  "main": "main.js",
+  "author": "Deadline Desk",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "electron .",
+    "postinstall": "electron-builder install-app-deps",
+    "build": "electron-builder --win nsis",
+    "pack": "electron-builder --dir"
+  },
+  "dependencies": {
+    "archiver": "7.0.1",
+    "extract-zip": "2.0.1",
+    "sql.js": "1.10.3"
+  },
+  "devDependencies": {
+    "electron": "28.3.3",
+    "electron-builder": "24.13.3",
+    "playwright-core": "^1.41.2"
+  },
+  "build": {
+    "appId": "com.deadlinedesk.app",
+    "productName": "截止线",
+    "asar": true,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "win": {
+      "icon": "assets/icon.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "截止线",
+      "deleteAppDataOnUninstall": false
+    }
+  }
+}
