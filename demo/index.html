@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>截止线 · 前端方向 Demo</title>
+  <link rel="stylesheet" href="demo.css">
+</head>
+<body>
+  <div class="demo-shell">
+    <aside class="rail">
+      <div class="brand-mark"><span>↗</span></div>
+      <div class="rail-label">截止线</div>
+      <nav class="rail-nav" aria-label="页面导航">
+        <button class="rail-button active" data-page="today" title="今天"><span class="rail-icon">◷</span><span>今天</span><b>4</b></button>
+        <button class="rail-button" data-page="assignments" title="大作业"><span class="rail-icon">▤</span><span>大作业</span><b>8</b></button>
+        <button class="rail-button" data-page="activities" title="活动"><span class="rail-icon">◌</span><span>活动</span><b>3</b></button>
+        <button class="rail-button" data-page="stats" title="统计"><span class="rail-icon">⌁</span><span>统计</span></button>
+      </nav>
+      <div class="rail-bottom">
+        <button class="rail-button" data-page="settings" title="设置"><span class="rail-icon">⚙</span><span>设置</span></button>
+        <div class="rail-status"><i></i><span>本地模式</span></div>
+      </div>
+    </aside>
+
+    <main class="main-stage">
+      <header class="topbar">
+        <div class="crumb"><span>工作台</span><strong>/</strong><b id="crumbPage">今天</b></div>
+        <label class="search"><span>⌕</span><input id="searchInput" placeholder="搜索事项、课程或活动" type="search"><kbd>Ctrl K</kbd></label>
+        <div class="top-actions"><button class="icon-button" id="themeButton" title="切换主题">☼</button><button class="avatar" title="本地账户">林</button></div>
+      </header>
+
+      <section class="content" id="todayPage">
+        <div class="intro-row">
+          <div><div class="eyebrow"><i></i>周一 · 2026 年 10 月 12 日</div><h1>今天先处理<br><em>最接近截止线的事。</em></h1><p>把注意力留给真正需要推进的任务，其余事项会安静地排好队。</p></div>
+          <button class="add-button" id="addButton"><span>＋</span>新增事项</button>
+        </div>
+
+        <div class="dashboard-grid">
+          <section class="priority-panel">
+            <header class="section-head"><div><span class="section-index">01</span><h2>临近截止</h2><p>未来 7 天内需要行动的事项</p></div><button class="link-button" id="showAll">查看全部 <span>↗</span></button></header>
+            <div class="task-list" id="taskList">
+              <article class="task-row urgent" data-title="数据结构课程设计" data-kind="assignment"><div class="task-date"><b>13</b><span>10 月</span></div><div class="task-main"><div class="task-top"><strong>数据结构课程设计</strong><span class="tag coral">明天到期</span></div><p>完成图算法模块与实验报告初稿</p><div class="task-meta"><span>大作业</span><i></i><span>个人</span></div></div><button class="task-check" data-task="数据结构课程设计" title="标记完成"></button><button class="more-button" title="更多操作">···</button></article>
+              <article class="task-row" data-title="校园摄影比赛" data-kind="activity"><div class="task-date"><b>15</b><span>10 月</span></div><div class="task-main"><div class="task-top"><strong>校园摄影比赛</strong><span class="tag amber">3 天后</span></div><p>提交秋日校园主题照片 3 张</p><div class="task-meta"><span>活动</span><i></i><span>报名截止</span></div></div><button class="task-check" data-task="校园摄影比赛" title="标记完成"></button><button class="more-button" title="更多操作">···</button></article>
+              <article class="task-row" data-title="数据库课程设计" data-kind="assignment"><div class="task-date"><b>17</b><span>10 月</span></div><div class="task-main"><div class="task-top"><strong>数据库课程设计</strong><span class="tag teal">5 天后</span></div><p>完成 ER 图、表结构和查询说明</p><div class="task-meta"><span>大作业</span><i></i><span>团队</span></div></div><button class="task-check" data-task="数据库课程设计" title="标记完成"></button><button class="more-button" title="更多操作">···</button></article>
+              <article class="task-row" data-title="英语演讲展示" data-kind="assignment"><div class="task-date"><b>19</b><span>10 月</span></div><div class="task-main"><div class="task-top"><strong>英语演讲展示</strong><span class="tag teal">7 天后</span></div><p>准备 5 分钟演讲与展示文稿</p><div class="task-meta"><span>大作业</span><i></i><span>个人</span></div></div><button class="task-check" data-task="英语演讲展示" title="标记完成"></button><button class="more-button" title="更多操作">···</button></article>
+            </div>
+            <div class="task-foot"><span><b id="taskCount">4</b> 项待处理</span><span class="saved-note">● 已自动保存</span></div>
+          </section>
+
+          <aside class="insight-column">
+            <section class="progress-panel">
+              <header class="section-head compact"><div><span class="section-index">02</span><h2>本周概览</h2></div><span class="more-dots">···</span></header>
+              <div class="progress-ring"><svg viewBox="0 0 120 120"><circle class="ring-bg" cx="60" cy="60" r="48"></circle><circle class="ring-value" cx="60" cy="60" r="48"></circle></svg><div><b>62<span>%</span></b><small>完成率</small></div></div>
+              <div class="stat-line"><span><i class="dot coral"></i>待完成</span><b>11</b></div><div class="stat-line"><span><i class="dot green"></i>本周完成</span><b>7</b></div><div class="stat-line"><span><i class="dot gray"></i>已逾期</span><b>2</b></div>
+            </section>
+            <section class="week-panel"><header class="section-head compact"><div><span class="section-index">03</span><h2>未来 7 天</h2></div><button class="week-arrow">→</button></header><div class="week-days" id="weekDays"><button class="day active"><span>今</span><b>12</b><i></i></button><button class="day has-item"><span>二</span><b>13</b><i></i></button><button class="day"><span>三</span><b>14</b></button><button class="day has-item"><span>四</span><b>15</b><i></i></button><button class="day"><span>五</span><b>16</b></button><button class="day has-item"><span>六</span><b>17</b><i></i></button><button class="day has-item"><span>日</span><b>18</b><i></i></button></div></section>
+            <section class="quote-panel"><span class="quote-mark">“</span><p>把截止日期变成可见的下一步，而不是脑中的背景噪音。</p><span class="quote-caption">DEADLINE DESK / LOCAL FIRST</span></section>
+          </aside>
+        </div>
+      </section>
+
+      <section class="content subpage hidden" id="listPage"><div class="subpage-heading"><div><div class="eyebrow"><i></i>任务管理</div><h1 id="listTitle">大作业</h1><p>所有课程任务都集中在这里，按截止时间自动排序。</p></div><button class="add-button" id="subAddButton"><span>＋</span>新增事项</button></div><div class="filter-bar"><button class="filter active">全部 <b>8</b></button><button class="filter">未开始 <b>3</b></button><button class="filter">进行中 <b>4</b></button><button class="filter">已完成 <b>1</b></button></div><div class="list-placeholder"><span>▤</span><h2>可继续沿用现有列表功能</h2><p>这个 demo 先展示新的信息架构和视觉语言。确认方向后，我会把真实列表、编辑、删除和附件功能接入这里。</p></div></section>
+      <section class="content subpage hidden" id="statsPage"><div class="subpage-heading"><div><div class="eyebrow"><i></i>数据回顾</div><h1>统计看板</h1><p>用更少的数字，了解本周的推进节奏。</p></div></div><div class="stats-demo"><div class="big-stat"><small>本周完成</small><b>07</b><span>比上周多完成 2 项</span></div><div class="big-stat"><small>平均提前</small><b>2.4<span>天</span></b><span>距离截止日期的平均余量</span></div><div class="big-stat accent"><small>当前风险</small><b>02</b><span>需要在今天重新安排</span></div></div></section>
+      <section class="content subpage hidden" id="settingsPage"><div class="subpage-heading"><div><div class="eyebrow"><i></i>偏好设置</div><h1>设置</h1><p>通知、桌面小组件与本地数据管理。</p></div></div><div class="settings-demo"><div><strong>截止日期通知</strong><span>事项到期前提醒你一次</span><button class="toggle on" id="toggleButton"><i></i></button></div><div><strong>桌面小组件</strong><span>在桌面显示未来 7 天的事项</span><button class="toggle on"><i></i></button></div><div><strong>数据存储</strong><span>所有数据仅保存在这台电脑</span><b class="local-badge">LOCAL</b></div></div></section>
+    </main>
+  </div>
+
+  <div class="modal hidden" id="addModal"><div class="modal-card"><button class="modal-close" id="closeModal">×</button><div class="eyebrow"><i></i>快速记录</div><h2>新增一条事项</h2><p>demo 仅用于展示新增流程的视觉样式。</p><label>事项名称<input id="newTaskInput" placeholder="例如：高等数学作业" autofocus></label><label>截止日期<input type="date" value="2026-10-20"></label><div class="modal-actions"><button class="link-button" id="cancelModal">取消</button><button class="add-button" id="saveDemo">保存事项</button></div></div></div>
+  <script src="demo.js"></script>
+</body>
+</html>

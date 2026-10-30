@@ -10,8 +10,15 @@
 <body>
   <main class="widget-shell">
     <div class="hover-controls"><button id="pinButton" aria-label="置顶" title="切换置顶" aria-pressed="false"><svg viewBox="0 0 14 14"><circle cx="7" cy="5" r="3.1"></circle><rect x="6.3" y="7.2" width="1.4" height="5" rx="0.7"></rect></svg></button><button id="closeButton" aria-label="关闭" title="关闭"><svg viewBox="0 0 14 14" class="stroke-icon"><path d="M3.5 3.5 10.5 10.5 M10.5 3.5 3.5 10.5"></path></svg></button></div>
-    <div class="widget-heading"><span>截止提醒</span><strong id="widgetCount">读取中</strong></div>
-    <div class="ios-list" id="widgetRows"></div>
+    <header class="widget-heading drag-zone">
+      <div class="heading-brand"><span class="brand-mark"><svg viewBox="0 0 24 24"><path d="M5 22V4"/><path d="M5 5c5-4 9 4 14 0v10c-5 4-9-4-14 0"/></svg></span><span class="heading-label">截止线</span></div>
+    </header>
+    <nav class="widget-tabs drag-zone" role="tablist" aria-label="小组件视图切换">
+      <button type="button" class="widget-tab" id="tabDeadlines" data-tab="deadlines" role="tab" aria-selected="true" aria-controls="widgetRows" tabindex="0">截止提醒<em class="tab-badge" id="tabDeadlinesBadge"></em></button>
+      <button type="button" class="widget-tab" id="tabHabits" data-tab="habits" role="tab" aria-selected="false" aria-controls="widgetHabits" tabindex="-1">今日打卡<em class="tab-badge" id="tabHabitsBadge" hidden></em></button>
+    </nav>
+    <div class="widget-view active" id="widgetRows" role="tabpanel" aria-labelledby="tabDeadlines" tabindex="0"></div>
+    <div class="widget-view" id="widgetHabits" role="tabpanel" aria-labelledby="tabHabits" tabindex="0"></div>
   </main>
   <script src="widget.js"></script>
 </body>

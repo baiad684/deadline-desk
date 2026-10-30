@@ -19,7 +19,8 @@ const dataDir = path.join(projectDir, 'test-output', 'debug-data');
   console.log('buttons named 活动:', buttons.length);
   await page.getByRole('button', { name: '活动' }).last().click();
   await page.locator('#itemTitle').fill('校园摄影赛投稿');
-  await page.locator('#itemDeadline').fill('2026-08-31');
+  await page.locator('#itemDeadlineDate').fill('2026-08-31');
+  await page.locator('#itemDeadlineTime').fill('14:30');
   await page.locator('#saveItemButton').click();
   await page.waitForTimeout(800);
 

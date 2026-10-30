@@ -14,6 +14,22 @@ contextBridge.exposeInMainWorld('deadlineDesk', {
     open: id => ipcRenderer.invoke('attachments:open', id),
     remove: id => ipcRenderer.invoke('attachments:delete', id)
   },
+  diary: {
+    get: date => ipcRenderer.invoke('diary:get', date),
+    save: (date, content) => ipcRenderer.invoke('diary:save', date, content),
+    listDates: () => ipcRenderer.invoke('diary:list-dates'),
+    remove: date => ipcRenderer.invoke('diary:delete', date)
+  },
+  habits: {
+    list: () => ipcRenderer.invoke('habits:list'),
+    calendar: (year, month) => ipcRenderer.invoke('habits:calendar', year, month),
+    create: input => ipcRenderer.invoke('habits:create', input),
+    update: (id, input) => ipcRenderer.invoke('habits:update', id, input),
+    remove: id => ipcRenderer.invoke('habits:delete', id),
+    setArchived: (id, archived) => ipcRenderer.invoke('habits:archive', id, archived),
+    toggleCheckin: (id, date) => ipcRenderer.invoke('habits:toggle-checkin', id, date),
+    onChanged: callback => ipcRenderer.on('habits:changed', () => callback())
+  },
   data: {
     backup: () => ipcRenderer.invoke('data:backup'),
     restore: () => ipcRenderer.invoke('data:restore'),
@@ -24,6 +40,10 @@ contextBridge.exposeInMainWorld('deadlineDesk', {
     setPinned: pinned => ipcRenderer.invoke('widget:set-pinned', pinned),
     openMain: () => ipcRenderer.invoke('widget:open-main'),
     resize: height => ipcRenderer.invoke('widget:resize', height),
+    dragStart: (x, y) => ipcRenderer.send('widget:drag-start', x, y),
+    dragMove: (x, y) => ipcRenderer.send('widget:drag-move', x, y),
+    dragEnd: () => ipcRenderer.send('widget:drag-end'),
+    toggleCheckin: id => ipcRenderer.invoke('widget:toggle-checkin', id),
     onData: callback => ipcRenderer.on('widget:data', (_event, snapshot) => callback(snapshot))
   },
   settings: {

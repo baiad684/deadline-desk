@@ -17,7 +17,7 @@ const dataDir = path.join(projectDir, 'test-output', 'probe-data');
   await page.waitForLoadState('domcontentloaded');
 
   const created = await page.evaluate(async () => window.deadlineDesk.items.create({
-    kind: 'assignment', title: '探针事项', description: '', deadline: '2026-09-05', status: 'not_started', workType: 'personal'
+    kind: 'assignment', title: '探针事项', description: '', deadline: '2026-09-05 14:30', status: 'not_started', workType: 'personal'
   }));
   console.log('created:', JSON.stringify(created));
 

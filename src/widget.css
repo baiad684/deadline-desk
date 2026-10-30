@@ -1,37 +1,112 @@
-:root { font-family: "Segoe UI Variable Text", "Microsoft YaHei UI", sans-serif; color: #172320; background: transparent; font-synthesis: none; }
+:root {
+  font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  color-synthesis: none;
+  color: var(--ink-900);
+  background: transparent;
+
+  --ink-900: #182220;
+  --ink-600: #57625e;
+  /* 对比度：ink-500 白底 5.59:1 / surface-2 5.27:1；ink-400 白底 4.83:1 / surface-2 4.55:1 */
+  --ink-500: #5f6a66;
+  --ink-400: #697470;
+
+  --line-100: #eef2f0;
+  --line-200: #e0e7e4;
+
+  --surface: #fff;
+  --surface-2: #f6f9f7;
+
+  --primary: #0d6e61;
+  --primary-hover: #0a5d52;
+  --primary-100: #dbeee9;
+
+  --danger: #b03a2e;
+  /* 警示色在白底 5.16:1、在 warning-soft 底 4.55:1（原 #97670c 仅 4.35:1） */
+  --warning: #8d610b;
+  --warning-soft: #faf0d8;
+
+  --ease: cubic-bezier(.25, .8, .3, 1);
+}
+
 * { box-sizing: border-box; }
-html, body { margin: 0; overflow: hidden; background: transparent; }
+html, body { height: 100%; margin: 0; overflow: hidden; background: transparent; }
+/* 高度上报按 offsetHeight + 32 计算，此 padding 不可改 */
 body { padding: 16px; }
 button { font: inherit; cursor: pointer; }
 
-.widget-shell { position: relative; -webkit-app-region: drag; overflow: hidden; padding-bottom: 8px; border: 1px solid rgba(0,0,0,.05); border-radius: 26px; background: linear-gradient(180deg, #ffffff, #fcfcfd); box-shadow: 0 4px 14px rgba(23,28,36,.12), 0 1px 3px rgba(23,28,36,.06); }
-.demo-view { animation: rise .16s ease-out; }
+/* 窗口拖动由 widget.js 的指针事件驱动：app-region 的命中图会随内部滚动整体失效（Electron 28 无 CSS 解法），
+   因此不使用 -webkit-app-region；拖动把手 = 页头 + tab 栏背景（.drag-zone） */
+.drag-zone { user-select: none; }
 
-.hover-controls { position: absolute; top: 12px; right: 12px; z-index: 2; display: flex; gap: 6px; opacity: 0; transform: translateY(-2px); transition: opacity .18s ease, transform .18s ease; -webkit-app-region: no-drag; }
-.widget-shell:hover .hover-controls { opacity: 1; transform: none; }
-.hover-controls button { width: 26px; height: 26px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; color: rgba(60,60,67,.72); background: rgba(242,242,247,.92); box-shadow: 0 1px 2px rgba(23,28,36,.08); }
-.hover-controls button:hover { background: rgba(229,229,234,.95); color: rgba(60,60,67,.95); }
+/* max-height 与上下 padding(16*2) 配合：内容超出时窗口不再长高，改为视图内部滚动 */
+.widget-shell { position: relative; display: flex; flex-direction: column; max-height: calc(100vh - 32px); overflow: hidden; padding-bottom: 8px; border: 1px solid var(--line-200); border-radius: 16px; background: var(--surface); box-shadow: 0 2px 6px rgba(20, 36, 32, .07), 0 18px 44px -18px rgba(20, 36, 32, .3); animation: rise .18s var(--ease); }
+
+.hover-controls { position: absolute; top: 11px; right: 12px; z-index: 2; display: flex; gap: 6px; opacity: .55; transition: opacity .18s var(--ease); }
+.widget-shell:hover .hover-controls, .widget-shell:focus-within .hover-controls { opacity: 1; }
+.hover-controls button { width: 30px; height: 30px; display: grid; place-items: center; padding: 0; border: 1px solid var(--line-200); border-radius: 8px; color: var(--ink-500); background: var(--surface); box-shadow: 0 1px 3px rgba(20, 36, 32, .1); transition: color .14s var(--ease), border-color .14s var(--ease), background-color .14s var(--ease); }
+.hover-controls button:hover { border-color: #aebbb5; background: var(--surface-2); color: var(--ink-900); }
 .hover-controls svg { width: 12px; height: 12px; fill: currentColor; }
 .hover-controls svg.stroke-icon { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
-.hover-controls #pinButton[aria-pressed="true"] { color: #007aff; }
+.hover-controls #pinButton[aria-pressed="true"] { color: var(--primary); border-color: var(--primary-100); }
 .hover-controls #pinButton[aria-pressed="false"] svg circle, .hover-controls #pinButton[aria-pressed="false"] svg rect { fill: none; stroke: currentColor; stroke-width: 1.5; }
 
-.widget-heading { display: flex; align-items: baseline; justify-content: space-between; margin: 14px 14px 8px; }
-.widget-heading span { color: rgba(60,60,67,.6); font-size: 12px; font-weight: 600; }
-.widget-heading strong { color: #1c1c1e; font-size: 13px; font-weight: 700; }
+/* 页头只留品牌区（待办计数移入 tab 角标）；右侧留出 30*2 + 6 的控件位避免与置顶/关闭按钮重叠 */
+.widget-heading { display: flex; align-items: center; margin: 13px 14px 8px; padding-right: 70px; }
+.heading-brand { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.brand-mark { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 6px; color: #fff; background: linear-gradient(160deg, #118a7b, var(--primary-hover)); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .22); }
+.brand-mark svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.heading-label { overflow: hidden; color: var(--ink-600); font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 
-.ios-list { display: flex; flex-direction: column; padding: 0 6px; }
-.todo-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 41px; padding: 5px 8px; border: 0; border-radius: 12px; background: transparent; text-align: left; -webkit-app-region: no-drag; }
-.todo-row:hover { background: rgba(120,120,128,.08); }
-.todo-row i { width: 18px; height: 18px; border: 1.5px solid #c7c7cc; border-radius: 50%; }
-.todo-row.today i { border-color: #ff9500; }
-.todo-row.overdue i { border-color: #ff3b30; background: #ff3b30; box-shadow: inset 0 0 0 3.5px #fff; }
+/* 分段式 tab：截止提醒 / 今日打卡双视图互斥，打卡不再挤占截止列表 */
+.widget-tabs { display: flex; gap: 4px; margin: 0 14px 7px; padding: 3px; border-radius: 10px; background: var(--line-100); }
+.widget-tab { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 26px; padding: 0 6px; border: 0; border-radius: 8px; color: var(--ink-500); background: transparent; font-size: 12px; font-weight: 600; letter-spacing: -.01em; transition: color .14s var(--ease), background-color .14s var(--ease); }
+.widget-tab:hover { color: var(--ink-900); }
+.widget-tab[aria-selected="true"] { color: var(--ink-900); background: var(--surface); box-shadow: 0 1px 3px rgba(20, 36, 32, .14); }
+.tab-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; padding: 1px 6px; border-radius: 999px; color: var(--ink-600); background: var(--surface); font-size: 10.5px; font-style: normal; font-weight: 600; line-height: 14px; font-variant-numeric: tabular-nums; }
+.widget-tab[aria-selected="true"] .tab-badge { background: var(--line-100); }
+.tab-badge[hidden] { display: none; }
+
+/* 活动视图是唯一的滚动容器：flex:1（0% 基准，容器高度不定时按内容贡献自然高）+ min-height:0，
+   窗口高度不足时只有这里滚动。不可写成 flex:1 1 0 —— 0px 是确定基准，会把外壳自然高算塌 */
+.widget-view { display: none; flex: 1; min-height: 0; flex-direction: column; padding: 0 8px 2px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--line-200) transparent; }
+.widget-view.active { display: flex; animation: fade .16s var(--ease); }
+.widget-view::-webkit-scrollbar { width: 6px; }
+.widget-view::-webkit-scrollbar-track { background: transparent; }
+.widget-view::-webkit-scrollbar-thumb { border-radius: 3px; background: var(--line-200); }
+.widget-view::-webkit-scrollbar-thumb:hover { background: #c6d2cc; }
+
+.todo-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 44px; padding: 6px 8px; border: 0; border-bottom: 1px solid var(--line-100); border-radius: 9px; background: transparent; text-align: left; transition: background-color .14s var(--ease); }
+.todo-row:last-child { border-bottom: 0; }
+.todo-row:hover { background: var(--surface-2); }
+.todo-row i { width: 17px; height: 17px; border: 1.5px solid #aebbb5; border-radius: 50%; }
+.todo-row.warning i { border-color: #c78a2f; }
+.todo-row.danger i { border-color: var(--danger); background: var(--danger); box-shadow: inset 0 0 0 3px #fff; }
 .row-text { min-width: 0; }
-.row-text b { display: block; overflow: hidden; color: #1c1c1e; font-size: 13px; font-weight: 600; letter-spacing: -.01em; line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
-.row-text span { display: block; margin-top: 2px; overflow: hidden; color: rgba(60,60,67,.45); font-size: 11px; line-height: 13px; text-overflow: ellipsis; white-space: nowrap; }
-.todo-row em { flex: 0 0 auto; padding: 3px 9px; border-radius: 999px; color: rgba(60,60,67,.6); background: rgba(120,120,128,.1); font-size: 11px; font-style: normal; font-weight: 600; line-height: 13px; }
-.todo-row.today em, .todo-row.overdue em { color: #ff3b30; background: rgba(255,59,48,.12); }
-.ios-empty { padding: 26px 0 20px; color: rgba(60,60,67,.45); font-size: 12px; text-align: center; }
+.row-text b { display: block; overflow: hidden; color: var(--ink-900); font-size: 12.5px; font-weight: 600; letter-spacing: -.01em; line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
+.row-text span { display: block; margin-top: 2px; overflow: hidden; color: var(--ink-500); font-size: 11.5px; line-height: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.todo-row em, .widget-habit-row em { flex: 0 0 auto; padding: 2px 7px; border-radius: 5px; color: var(--ink-600); background: var(--line-100); font-size: 11px; font-style: normal; font-weight: 600; line-height: 15px; font-variant-numeric: tabular-nums; }
+.todo-row.progress em { color: var(--primary-hover); background: var(--primary-100); }
+.todo-row.warning em { color: var(--warning); background: var(--warning-soft); }
+.todo-row.danger em { color: var(--danger); background: #faeae7; }
+
+/* 打卡行：全部任务纵列展示，未完成在前、已完成沉底弱化；点击行即打卡 / 取消 */
+.widget-habit-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 44px; padding: 6px 8px; border: 0; border-bottom: 1px solid var(--line-100); border-radius: 9px; background: transparent; text-align: left; transition: background-color .14s var(--ease); }
+.widget-habit-row:last-child { border-bottom: 0; }
+.widget-habit-row:hover { background: var(--surface-2); }
+.widget-habit-row i { width: 17px; height: 17px; border: 1.5px solid #aebbb5; border-radius: 50%; transition: border-color .14s var(--ease), transform .14s var(--ease); }
+.widget-habit-row:not(.done):hover i { border-color: var(--primary); transform: scale(1.1); }
+.widget-habit-row:not(.done):active i { transform: scale(.92); }
+.widget-habit-row.done i { border-color: var(--primary); background: var(--primary); box-shadow: inset 0 0 0 3px #fff; }
+.widget-habit-row.done .row-text b { color: var(--ink-400); }
+
+.widget-empty { display: grid; justify-items: center; gap: 8px; padding: 26px 0 22px; }
+.widget-empty svg { width: 26px; height: 26px; padding: 7px; border-radius: 50%; color: var(--primary); background: var(--primary-100); }
+.widget-empty span { color: var(--ink-500); font-size: 11.5px; }
+.widget-empty-action { padding: 5px 12px; border: 0; border-radius: 8px; color: var(--primary); background: transparent; font-size: 11.5px; font-weight: 600; transition: background-color .14s var(--ease); }
+.widget-empty-action:hover { background: var(--primary-100); }
+
+button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 
 @keyframes rise { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; } }

@@ -17,8 +17,11 @@
 
       <nav class="main-nav" aria-label="主导航">
         <button class="nav-item active" data-page="today"><span data-icon="sun"></span><span>今天</span><span class="nav-count" id="todayCount">0</span></button>
+        <button class="nav-item" data-page="diary"><span data-icon="diary"></span><span>日记</span></button>
+        <button class="nav-item" data-page="habits"><span data-icon="repeat"></span><span>日常</span><span class="nav-count" id="habitCount">0</span></button>
         <button class="nav-item" data-page="assignments"><span data-icon="book"></span><span>大作业</span><span class="nav-count" id="assignmentCount">0</span></button>
         <button class="nav-item" data-page="activities"><span data-icon="ticket"></span><span>活动</span><span class="nav-count" id="activityCount">0</span></button>
+        <button class="nav-item" data-page="overdue"><span data-icon="warning"></span><span>逾期</span><span class="nav-count overdue-count" id="overdueCount">0</span></button>
         <button class="nav-item" data-page="stats"><span data-icon="chart"></span><span>统计</span></button>
       </nav>
 
@@ -35,11 +38,11 @@
       <header class="topbar">
         <label class="search-box" id="searchBox">
           <span data-icon="search"></span>
-          <input id="searchInput" type="search" placeholder="搜索作业或活动" autocomplete="off">
+          <input id="searchInput" type="search" placeholder="搜索大作业或活动" aria-label="搜索大作业或活动" autocomplete="off">
           <kbd>Ctrl K</kbd>
         </label>
         <div class="top-actions">
-          <button class="icon-button" id="notificationButton" title="通知状态"><span data-icon="bell"></span></button>
+          <button class="icon-button" id="notificationButton" title="通知状态" aria-label="通知状态"><span data-icon="bell"></span></button>
         </div>
       </header>
 
@@ -55,11 +58,14 @@
               <div class="deadline-list" id="deadlineList"></div>
             </section>
             <aside class="side-stack">
+              <section class="panel hidden" id="habitCardPanel">
+                <header class="panel-header"><div><h2>今日打卡</h2><span id="habitCardCaption">日常任务</span></div></header>
+                <div class="habit-card-list" id="habitCardList"></div>
+              </section>
               <section class="panel">
                 <header class="panel-header"><div><h2>本周概览</h2><span>实时统计</span></div></header>
                 <div class="metric-grid">
                   <div class="metric"><span>待完成</span><strong id="pendingMetric">0<small>项</small></strong></div>
-                  <div class="metric danger"><span>已逾期</span><strong id="overdueMetric">0<small>项</small></strong></div>
                   <div class="metric"><span>进行中</span><strong id="progressMetric">0<small>项</small></strong></div>
                   <div class="metric"><span>本周完成</span><strong id="weekDoneMetric">0<small>项</small></strong></div>
                 </div>
@@ -80,12 +86,12 @@
           </div>
           <div class="list-toolbar">
             <div class="segmented" id="assignmentFilters">
-              <button class="active" data-filter="all">全部</button><button data-filter="not_started">未开始</button><button data-filter="in_progress">进行中</button><button data-filter="completed">已完成</button>
+              <button class="active" data-filter="all" aria-pressed="true">全部</button><button data-filter="not_started" aria-pressed="false">未开始</button><button data-filter="in_progress" aria-pressed="false">进行中</button><button data-filter="completed" aria-pressed="false">已完成</button>
             </div>
             <span class="result-count" id="assignmentResultCount"></span>
           </div>
           <div class="item-table panel">
-            <div class="table-head"><span>课程 / 要求</span><span>类型</span><span>截止日期</span><span>状态</span><span></span></div>
+            <div class="table-head"><span>课程 / 要求</span><span>类型</span><span>截止时间</span><span>状态</span><span></span></div>
             <div id="assignmentList"></div>
           </div>
         </section>
@@ -97,13 +103,27 @@
           </div>
           <div class="list-toolbar">
             <div class="segmented" id="activityFilters">
-              <button class="active" data-filter="all">全部</button><button data-filter="not_completed">未完成</button><button data-filter="completed">已完成</button>
+              <button class="active" data-filter="all" aria-pressed="true">全部</button><button data-filter="not_completed" aria-pressed="false">未完成</button><button data-filter="completed" aria-pressed="false">已完成</button>
             </div>
             <span class="result-count" id="activityResultCount"></span>
           </div>
           <div class="item-table panel">
-            <div class="table-head activity"><span>活动名称</span><span>截止日期</span><span>状态</span><span></span></div>
+            <div class="table-head activity"><span>活动名称</span><span>截止时间</span><span>状态</span><span></span></div>
             <div id="activityList"></div>
+          </div>
+        </section>
+
+        <section class="page" data-page-view="overdue">
+          <div class="page-heading list-heading">
+            <div><h1>已逾期</h1><p>超过截止时刻还未完成的事项，集中在这里处理。</p></div>
+          </div>
+          <div class="list-toolbar">
+            <span class="overdue-hint">标记完成或调整截止时间后，事项会自动移出此列表。</span>
+            <span class="result-count" id="overdueResultCount"></span>
+          </div>
+          <div class="item-table panel">
+            <div class="table-head overdue"><span>事项 / 说明</span><span>截止时间</span><span>状态</span><span></span></div>
+            <div id="overdueList"></div>
           </div>
         </section>
 
@@ -124,10 +144,78 @@
                 <div class="activity-numbers"><div><span>参加总数</span><strong id="activityTotalStat">0</strong></div><div><span>已完成</span><strong id="activityDoneStat">0</strong></div><div><span>未完成</span><strong id="activityPendingStat">0</strong></div></div>
               </div>
             </section>
+            <section class="panel stats-panel habit-panel">
+              <header class="panel-header"><div><h2>日常任务打卡</h2><span id="habitStatsCaption">暂无任务</span></div></header>
+              <div class="stats-content habit-content">
+                <div class="habit-calendar-wrap">
+                  <div class="habit-calendar-head" aria-hidden="true"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div>
+                  <div class="habit-calendar" id="habitCalendarGrid"></div>
+                  <div class="habit-calendar-legend">
+                    <span class="habit-legend-item" title="当天打了卡，但没全部完成（当天至少有两项任务）"><i class="legend-sw level-1"></i>部分完成</span>
+                    <span class="habit-legend-item" title="当天所有应打卡任务都完成了"><i class="legend-sw level-2"></i>全部完成</span>
+                  </div>
+                </div>
+                <div class="habit-summary">
+                  <div class="habit-rate" id="habitRateBlock">
+                    <span class="habit-rate-head"><span class="habit-rate-label">本月打卡率</span><span class="habit-rate-range" id="habitRateRange"></span></span>
+                    <strong class="habit-rate-value" id="habitMonthRate">—</strong>
+                    <span class="habit-rate-track"><i class="habit-rate-fill" id="habitMonthFill"></i></span>
+                    <p class="habit-rate-meta" id="habitMonthMeta">暂无应打卡的日子</p>
+                  </div>
+                  <div class="habit-facts">
+                    <div><span>今日完成</span><strong id="habitTodayStat">0 / 0</strong></div>
+                    <div><span>累计打卡</span><strong id="habitAllCheckinsStat">0</strong></div>
+                  </div>
+                </div>
+              </div>
+            </section>
             <section class="panel overview-panel">
               <header class="panel-header"><div><h2>截止风险</h2><span>需要优先留意的事项</span></div></header>
               <div class="risk-list" id="riskList"></div>
             </section>
+          </div>
+        </section>
+
+        <section class="page" data-page-view="diary">
+          <div class="page-heading"><div><h1>日记</h1></div></div>
+          <div class="diary-layout">
+            <section class="panel diary-calendar-panel">
+              <header class="panel-header">
+                <div><h2 id="diaryMonthLabel"></h2></div>
+                <div class="diary-month-actions">
+                  <button class="icon-button" id="diaryPrevMonth" title="上个月" aria-label="上个月"><span data-icon="left"></span></button>
+                  <button class="text-button" id="diaryTodayButton">今天</button>
+                  <button class="icon-button" id="diaryNextMonth" title="下个月" aria-label="下个月"><span data-icon="right"></span></button>
+                </div>
+              </header>
+              <div class="diary-weekdays"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div>
+              <div class="diary-grid" id="diaryGrid"></div>
+            </section>
+            <section class="panel diary-editor-panel">
+              <header class="panel-header"><div><h2 id="diaryDateLabel"></h2><span id="diaryWeekdayLabel"></span></div></header>
+              <textarea class="diary-textarea" id="diaryContent" maxlength="10000" placeholder="写下这一天的内容，输入后会自动保存"></textarea>
+              <footer class="diary-footer">
+                <span class="diary-status" id="diaryStatus"></span>
+                <span class="diary-count" id="diaryCount">0 字</span>
+                <button class="danger-button" id="diaryDeleteButton"><span data-icon="trash"></span>删除日记</button>
+              </footer>
+            </section>
+          </div>
+        </section>
+
+        <section class="page" data-page-view="habits">
+          <div class="page-heading list-heading">
+            <div><h1>日常任务</h1><p>每天都要做的小事，做完就打卡，断不了的就成习惯。</p></div>
+            <button class="primary-button" id="newHabitButton"><span data-icon="plus"></span>新增任务</button>
+          </div>
+          <div class="panel habit-progress-panel">
+            <div class="habit-progress-copy"><span>今日打卡进度</span><strong id="habitProgressLabel">0 / 0</strong></div>
+            <div class="habit-progress-track"><div class="habit-progress-fill" id="habitProgressFill"></div></div>
+          </div>
+          <div class="habit-list" id="habitList"></div>
+          <div class="habit-archived hidden" id="habitArchivedSection">
+            <button type="button" class="habit-archived-toggle" id="habitArchivedToggle">已归档（0）</button>
+            <div class="habit-archived-list hidden" id="habitArchivedList"></div>
           </div>
         </section>
 
@@ -151,8 +239,8 @@
             </section>
             <section class="settings-group panel">
               <header class="panel-header"><div><h2>本地数据</h2><span>仅保存在这台电脑</span></div></header>
-              <div class="data-path"><span data-icon="folder"></span><div><strong>应用数据目录</strong><code id="dataPath">正在读取...</code></div><button class="icon-button" id="openDataFolderButton" title="打开数据目录"><span data-icon="external"></span></button></div>
-              <div class="danger-zone"><div><strong>清空全部数据</strong><p>永久删除所有事项和附件，此操作只能通过已有备份恢复。</p></div><button class="danger-button" id="clearDataButton"><span data-icon="trash"></span>清空数据</button></div>
+              <div class="data-path"><span data-icon="folder"></span><div><strong>应用数据目录</strong><code id="dataPath">正在读取...</code></div><button class="icon-button" id="openDataFolderButton" title="打开数据目录" aria-label="打开数据目录"><span data-icon="external"></span></button></div>
+              <div class="danger-zone"><div><strong>清空全部数据</strong><p>永久删除所有事项、附件和日记，此操作只能通过已有备份恢复。</p></div><button class="danger-button" id="clearDataButton"><span data-icon="trash"></span>清空数据</button></div>
             </section>
           </div>
         </section>
@@ -161,8 +249,8 @@
   </div>
 
   <div class="modal-backdrop" id="itemModal" aria-hidden="true">
-    <form class="modal" id="itemForm">
-      <header class="modal-header"><div><h2 id="itemModalTitle">新增事项</h2><p id="itemModalSubtitle">记录一个新的截止日期</p></div><button type="button" class="icon-button modal-close" title="关闭"><span data-icon="close"></span></button></header>
+    <form class="modal" id="itemForm" role="dialog" aria-modal="true" aria-labelledby="itemModalTitle" aria-describedby="itemModalSubtitle">
+      <header class="modal-header"><div><h2 id="itemModalTitle">新增事项</h2><p id="itemModalSubtitle">记录一个新的截止日期</p></div><button type="button" class="icon-button modal-close" title="关闭" aria-label="关闭"><span data-icon="close"></span></button></header>
       <div class="modal-body">
         <input type="hidden" id="itemId">
         <div class="form-row form-row-kind">
@@ -172,7 +260,24 @@
         <div class="form-grid">
           <label class="field full"><span id="titleLabel">课程名称</span><input id="itemTitle" maxlength="120" required placeholder="例如：数据库课程设计"></label>
           <label class="field full"><span>要求说明 <small>选填</small></span><textarea id="itemDescription" maxlength="10000" rows="4" placeholder="记录需要完成的内容"></textarea></label>
-          <label class="field"><span>截止日期</span><input id="itemDeadline" type="date" required></label>
+          <div class="field full deadline-field">
+            <span>截止时间</span>
+            <div class="deadline-control">
+              <span class="deadline-glyph" data-icon="calendar"></span>
+              <input id="itemDeadlineDate" type="date" required aria-label="截止日期">
+              <span class="deadline-sep" aria-hidden="true"></span>
+              <input id="itemDeadlineTime" type="time" aria-label="截止时刻，留空按 23:59 处理">
+            </div>
+            <div class="deadline-aux">
+              <div class="deadline-chips" id="deadlineChips">
+                <button type="button" data-day-offset="0">今天</button>
+                <button type="button" data-day-offset="1">明天</button>
+                <button type="button" data-day-offset="2">后天</button>
+                <button type="button" data-day-offset="7">一周后</button>
+              </div>
+              <span class="deadline-preview" id="deadlinePreview"></span>
+            </div>
+          </div>
           <label class="field assignment-only"><span>作业类型</span><select id="itemWorkType"><option value="personal">个人</option><option value="team">团队</option></select></label>
           <label class="field"><span>状态</span><select id="itemStatus"></select></label>
         </div>
@@ -185,22 +290,36 @@
     </form>
   </div>
 
+  <div class="modal-backdrop" id="habitModal" aria-hidden="true">
+    <form class="modal" id="habitForm" role="dialog" aria-modal="true" aria-labelledby="habitModalTitle">
+      <header class="modal-header"><div><h2 id="habitModalTitle">新增日常任务</h2><p>每天都想坚持的一件事</p></div><button type="button" class="icon-button habit-modal-close" title="关闭" aria-label="关闭"><span data-icon="close"></span></button></header>
+      <div class="modal-body">
+        <input type="hidden" id="habitId">
+        <div class="form-grid">
+          <label class="field full"><span>任务名称</span><input id="habitTitle" maxlength="60" required placeholder="例如：背 20 个单词"></label>
+          <label class="field full"><span>备注 <small>选填</small></span><input id="habitNote" maxlength="200" placeholder="例如：睡前完成"></label>
+        </div>
+      </div>
+      <footer class="modal-footer"><button type="button" class="secondary-button habit-modal-close">取消</button><button type="submit" class="primary-button"><span data-icon="check"></span>保存任务</button></footer>
+    </form>
+  </div>
+
   <div class="modal-backdrop" id="dayItemsModal" aria-hidden="true">
-    <div class="day-items-dialog">
-      <header class="modal-header"><div><h2 id="dayItemsTitle">当天待办</h2><p id="dayItemsSubtitle"></p></div><button type="button" class="icon-button day-items-close" title="关闭"><span data-icon="close"></span></button></header>
+    <div class="day-items-dialog" role="dialog" aria-modal="true" aria-labelledby="dayItemsTitle">
+      <header class="modal-header"><div><h2 id="dayItemsTitle">当天待办</h2><p id="dayItemsSubtitle"></p></div><button type="button" class="icon-button day-items-close" title="关闭" aria-label="关闭"><span data-icon="close"></span></button></header>
       <div class="day-items-list" id="dayItemsList"></div>
     </div>
   </div>
 
   <div class="modal-backdrop detail-backdrop" id="itemDetailModal" aria-hidden="true">
-    <div class="item-detail-dialog">
-      <header class="modal-header"><button type="button" class="icon-button" id="detailBackButton" title="返回当天待办"><span data-icon="left"></span></button><div><h2 id="detailTitle">事项详情</h2><p id="detailSubtitle"></p></div><button type="button" class="icon-button detail-close" title="关闭"><span data-icon="close"></span></button></header>
+    <div class="item-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="detailTitle">
+      <header class="modal-header"><button type="button" class="icon-button" id="detailBackButton" title="返回当天待办" aria-label="返回当天待办"><span data-icon="left"></span></button><div><h2 id="detailTitle">事项详情</h2><p id="detailSubtitle"></p></div><button type="button" class="icon-button detail-close" title="关闭" aria-label="关闭"><span data-icon="close"></span></button></header>
       <div class="item-detail-body" id="itemDetailBody"></div>
     </div>
   </div>
 
   <div class="modal-backdrop" id="confirmModal" aria-hidden="true">
-    <div class="confirm-dialog">
+    <div class="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmMessage">
       <div class="confirm-icon" id="confirmIcon"><span data-icon="warning"></span></div>
       <h2 id="confirmTitle">确认操作</h2><p id="confirmMessage"></p>
       <div class="confirm-actions"><button class="secondary-button" id="confirmCancel">取消</button><button class="danger-button" id="confirmAccept">确认</button></div>

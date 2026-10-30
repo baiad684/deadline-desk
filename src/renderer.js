@@ -2,6 +2,7 @@ const icons = {
   flag: '<path d="M5 22V4"/><path d="M5 5c5-4 9 4 14 0v10c-5 4-9-4-14 0"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.66 6.34l1.41-1.41"/>',
   book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
+  calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
   ticket: '<path d="M2 9a3 3 0 0 0 0 6v4h20v-4a3 3 0 0 0 0-6V5H2z"/><path d="M13 5v2M13 17v2M13 11v2"/>',
   chart: '<path d="M3 3v18h18"/><path d="M7 16v-5M12 16V7M17 16v-3"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.08A1.7 1.7 0 0 0 9 19.37a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.63 15 1.7 1.7 0 0 0 3.08 14H3v-4h.08A1.7 1.7 0 0 0 4.63 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.63 1.7 1.7 0 0 0 10 3.08V3h4v.08A1.7 1.7 0 0 0 15 4.63a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.37 9 1.7 1.7 0 0 0 20.92 10H21v4h-.08A1.7 1.7 0 0 0 19.4 15z"/>',
@@ -18,6 +19,9 @@ const icons = {
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
   upload: '<path d="M17 8l-5-5-5 5M12 3v12M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>',
   left: '<path d="m15 18-6-6 6-6"/>',
+  right: '<path d="m9 18 6-6-6-6"/>',
+  diary: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 3v18"/><path d="M12 8h5M12 12h5"/>',
+  repeat: '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
   folder: '<path d="M3 5h6l2 2h10v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
   warning: '<path d="M10.3 2.9 1.8 17a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 2.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
@@ -33,13 +37,66 @@ const state = {
   modalKind: 'assignment',
   selectedFiles: [],
   existingAttachments: [],
+  animateTodayRows: true,
+  justCompletedId: null,
   confirmResolver: null,
-  notificationsEnabled: true
+  itemFormBaseline: null,
+  notificationsEnabled: true,
+  diaryDates: new Set(),
+  diaryView: { year: 0, month: 0 },
+  diaryDate: '',
+  diarySavedContent: '',
+  diarySaveTimer: null,
+  habits: [],
+  habitArchivedOpen: false
 };
 
 const api = window.deadlineDesk;
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
+
+// ---------- 对话框焦点管理 ----------
+// 弹窗必须把焦点锁在 dialog 内，关闭后把焦点还给触发它的元素。
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const modalStack = [];
+
+function focusableIn(root) {
+  return [...root.querySelectorAll(FOCUSABLE)].filter(node => node.getClientRects().length > 0);
+}
+
+function openModalLayer(backdrop) {
+  if (!backdrop || modalStack.some(layer => layer.backdrop === backdrop)) return;
+  const active = document.activeElement;
+  modalStack.push({ backdrop, opener: active && !backdrop.contains(active) ? active : null });
+  const first = focusableIn(backdrop)[0];
+  if (first) setTimeout(() => first.focus(), 0);
+}
+
+function closeModalLayer(backdrop) {
+  const index = modalStack.findIndex(layer => layer.backdrop === backdrop);
+  if (index === -1) return;
+  const [layer] = modalStack.splice(index, 1);
+  const next = modalStack[modalStack.length - 1];
+  if (next) {
+    const target = focusableIn(next.backdrop)[0];
+    if (target) setTimeout(() => target.focus(), 0);
+  } else if (layer.opener && document.contains(layer.opener)) {
+    setTimeout(() => layer.opener.focus(), 0);
+  }
+}
+
+function closeTopModal() {
+  const layer = modalStack[modalStack.length - 1];
+  if (!layer) return;
+  const closers = {
+    itemModal: closeItemModal,
+    habitModal: closeHabitModal,
+    dayItemsModal: closeDayItems,
+    itemDetailModal: () => closeItemDetail(),
+    confirmModal: () => resolveConfirmation(false)
+  };
+  closers[layer.backdrop.id]?.();
+}
 
 function mountIcons(root = document) {
   root.querySelectorAll('[data-icon]').forEach(node => {
@@ -58,31 +115,47 @@ function localDate(date = new Date()) {
 }
 
 function parseDate(value) {
-  const [year, month, day] = value.split('-').map(Number);
-  return new Date(year, month - 1, day);
+  const [datePart, timePart = '23:59'] = String(value).split(' ');
+  const [year, month, day] = datePart.split('-').map(Number);
+  const [hour, minute] = timePart.split(':').map(Number);
+  return new Date(year, month - 1, day, hour, minute);
 }
 
 function daysUntil(value) {
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  return Math.round((parseDate(value) - today) / 86400000);
+  const target = parseDate(value);
+  const targetDay = new Date(target.getFullYear(), target.getMonth(), target.getDate());
+  return Math.round((targetDay - today) / 86400000);
 }
 
 function isCompleted(item) { return item.status === 'completed'; }
-function isOverdue(item) { return !isCompleted(item) && daysUntil(item.deadline) < 0; }
+function isOverdue(item) { return !isCompleted(item) && parseDate(item.deadline) < new Date(); }
 function isPending(item) { return !isCompleted(item); }
+
+// 23:59 视为“当天截止”，不额外展示时刻
+function timePartOf(value) {
+  const timePart = String(value).split(' ')[1];
+  return timePart && timePart !== '23:59' ? ` ${timePart}` : '';
+}
 
 function formatDate(value, includeYear = false) {
   const date = parseDate(value);
-  return `${includeYear ? `${date.getFullYear()}年` : ''}${date.getMonth() + 1}月${date.getDate()}日`;
+  return `${includeYear ? `${date.getFullYear()}年` : ''}${date.getMonth() + 1}月${date.getDate()}日${timePartOf(value)}`;
 }
 
 function timingLabel(item) {
   if (isCompleted(item)) return '已完成';
+  const now = new Date();
+  const elapsed = now - parseDate(item.deadline);
+  if (elapsed > 0) {
+    if (elapsed < 3600000) return `已逾期 ${Math.max(1, Math.round(elapsed / 60000))} 分钟`;
+    if (elapsed < 86400000) return `已逾期 ${Math.max(1, Math.round(elapsed / 3600000))} 小时`;
+    return `已逾期 ${Math.abs(daysUntil(item.deadline))} 天`;
+  }
   const days = daysUntil(item.deadline);
-  if (days < 0) return `已逾期 ${Math.abs(days)} 天`;
-  if (days === 0) return '今天到期';
-  if (days === 1) return '明天到期';
+  if (days === 0) return `今天${timePartOf(item.deadline)}到期`;
+  if (days === 1) return `明天${timePartOf(item.deadline)}到期`;
   return `${days} 天后到期`;
 }
 
@@ -98,6 +171,10 @@ function nextStatus(item) {
     return { not_started: 'in_progress', in_progress: 'completed', completed: 'in_progress' }[item.status];
   }
   return item.status === 'completed' ? 'not_completed' : 'completed';
+}
+
+function nextStatusLabel(item) {
+  return statusLabel({ status: nextStatus(item) });
 }
 
 function statusClass(item) {
@@ -162,44 +239,53 @@ function getWeekNumber(date) {
 function renderNavigation() {
   const actionable = state.items.filter(item => {
     const days = daysUntil(item.deadline);
-    return isPending(item) && days >= 0 && days <= 7;
+    return isPending(item) && !isOverdue(item) && days >= 0 && days <= 7;
   }).length;
   $('#todayCount').textContent = actionable;
-  $('#assignmentCount').textContent = state.items.filter(item => item.kind === 'assignment').length;
-  $('#activityCount').textContent = state.items.filter(item => item.kind === 'activity').length;
+  $('#assignmentCount').textContent = state.items.filter(item => item.kind === 'assignment' && !isOverdue(item)).length;
+  $('#activityCount').textContent = state.items.filter(item => item.kind === 'activity' && !isOverdue(item)).length;
+  const overdueTotal = state.items.filter(isOverdue).length;
+  $('#overdueCount').textContent = overdueTotal;
+  $('#overdueCount').classList.toggle('zero', overdueTotal === 0);
+  $('#habitCount').textContent = activeHabits().filter(habit => !habit.checked_today).length;
   const attachmentCount = state.items.reduce((total, item) => total + item.attachments.length, 0);
   $('#storageSummary').textContent = `${state.items.length} 条记录 · ${attachmentCount} 个附件`;
 }
 
 function statusButton(item) {
-  return `<button class="status-button ${isCompleted(item) ? 'completed' : ''}" data-action="status" data-id="${item.id}" title="切换状态"><span class="status-ring">${isCompleted(item) ? `<svg class="icon sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m5 12 4 4L19 6"/></svg>` : ''}</span><span>${escapeHtml(statusLabel(item))}</span></button>`;
+  const completed = isCompleted(item);
+  const justCompleted = completed && item.id === state.justCompletedId;
+  return `<button class="status-button ${completed ? 'completed' : ''} ${justCompleted ? 'just-completed' : ''}" data-action="status" data-id="${item.id}" title="切换状态" aria-label="将“${escapeHtml(item.title)}”标记为${escapeHtml(nextStatusLabel(item))}"><span class="status-ring">${completed ? `<svg class="icon sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m5 12 4 4L19 6"/></svg>` : ''}</span><span>${escapeHtml(statusLabel(item))}</span></button>`;
 }
 
 function renderToday() {
   const actionable = sorted(state.items.filter(item => {
     const days = daysUntil(item.deadline);
-    return isPending(item) && days >= 0 && days <= 7 && matchesSearch(item);
+    return isPending(item) && !isOverdue(item) && days >= 0 && days <= 7 && matchesSearch(item);
   }));
-  const overdue = state.items.filter(isOverdue).length;
   $('#todaySubtitle').textContent = actionable.length
     ? `${actionable.length} 个事项将在未来 7 天内到期。`
     : state.items.length ? '未来 7 天没有需要处理的事项。' : '添加事项后，这里会自动显示临期内容。';
 
   const list = $('#deadlineList');
+  list.classList.toggle('entering', state.animateTodayRows);
+  state.animateTodayRows = false;
   if (!actionable.length) {
     list.innerHTML = emptyState(state.items.length ? '暂无到期事项' : '从第一条截止日期开始', state.items.length ? '可以放心推进手头的事情。' : '添加大作业或活动，截止线会帮你集中追踪。', '新增事项', 'assignment');
   } else {
     list.innerHTML = actionable.map(item => {
       const date = parseDate(item.deadline);
       const days = daysUntil(item.deadline);
-      const badgeClass = days < 0 ? 'danger' : days <= 1 ? 'warning' : 'progress';
+      const badgeClass = days <= 1 ? 'warning' : 'progress';
       const typeBadge = item.kind === 'assignment' ? `<span class="badge ${item.work_type === 'team' ? 'team' : 'personal'}">${item.work_type === 'team' ? '团队' : '个人'}</span>` : '<span class="badge progress">活动</span>';
       return `<article class="deadline-row">
-        <div class="date-box ${days < 0 ? 'overdue' : ''}"><strong>${date.getDate()}</strong>${date.getMonth() + 1}月</div>
+        <div class="date-box"><strong>${date.getDate()}</strong>${date.getMonth() + 1}月</div>
         <div class="row-copy"><div class="row-title"><strong>${escapeHtml(item.title)}</strong>${typeBadge}<span class="badge ${badgeClass}">${escapeHtml(timingLabel(item))}</span></div><div class="row-sub">${escapeHtml(item.description || `${kindLabel(item)} · 暂无补充说明`)}</div></div>
-        <div class="row-actions">${statusButton(item)}<button class="icon-button" data-action="edit" data-id="${item.id}" title="编辑"><span data-icon="edit"></span></button></div>
+        <div class="row-actions">${statusButton(item)}<button class="icon-button" data-action="edit" data-id="${item.id}" title="编辑" aria-label="编辑“${escapeHtml(item.title)}”"><span data-icon="edit"></span></button><button class="icon-button" data-action="delete" data-id="${item.id}" title="删除" aria-label="删除“${escapeHtml(item.title)}”"><span data-icon="trash"></span></button></div>
       </article>`;
     }).join('');
+    // CSP 禁止内联 style 属性，交错延迟需经 CSSOM 写入
+    list.querySelectorAll('.deadline-row').forEach((row, index) => row.style.setProperty('--row-delay', `${Math.min(index * 45, 200)}ms`));
   }
 
   const pending = state.items.filter(isPending).length;
@@ -208,7 +294,6 @@ function renderToday() {
   const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7));
   const weekDone = state.items.filter(item => isCompleted(item) && new Date(`${item.updated_at.replace(' ', 'T')}Z`) >= weekStart).length;
   $('#pendingMetric').innerHTML = `${pending}<small>项</small>`;
-  $('#overdueMetric').innerHTML = `${overdue}<small>项</small>`;
   $('#progressMetric').innerHTML = `${progress}<small>项</small>`;
   $('#weekDoneMetric').innerHTML = `${weekDone}<small>项</small>`;
   renderWeekStrip();
@@ -220,16 +305,14 @@ function renderWeekStrip() {
   const dates = Array.from({ length: 7 }, (_, index) => new Date(today.getFullYear(), today.getMonth(), today.getDate() + index));
   $('#weekStrip').innerHTML = dates.map((date, index) => {
     const dateValue = localDate(date);
-    const hasItems = state.items.some(item => isPending(item) && item.deadline === dateValue);
-    return `<button type="button" class="week-day ${index === 0 ? 'today' : ''} ${hasItems ? 'has-item' : ''}" ${hasItems ? `data-day="${dateValue}" title="查看当天待办"` : 'disabled'}>${labels[date.getDay()]}<strong>${date.getDate()}</strong></button>`;
+    const hasItems = state.items.some(item => isPending(item) && !isOverdue(item) && item.deadline.slice(0, 10) === dateValue);
+    return `<button type="button" class="week-day ${index === 0 ? 'today' : ''} ${hasItems ? 'has-item' : ''}" aria-label="${date.getMonth() + 1}月${date.getDate()}日 周${labels[date.getDay()]}${hasItems ? '，查看当天待办' : '，没有待办'}" ${hasItems ? `data-day="${dateValue}" title="查看当天待办"` : 'disabled'}>${labels[date.getDay()]}<strong>${date.getDate()}</strong></button>`;
   }).join('');
 }
 
-function openDayItems(dateValue) {
-  const items = sorted(state.items.filter(item => isPending(item) && item.deadline === dateValue));
-  if (!items.length) return;
-  $('#dayItemsTitle').textContent = `${formatDate(dateValue, true)}待办`;
-  $('#dayItemsSubtitle').textContent = `共 ${items.length} 个未完成事项`;
+function fillItemsDialog(title, subtitle, items) {
+  $('#dayItemsTitle').textContent = title;
+  $('#dayItemsSubtitle').textContent = subtitle;
   $('#dayItemsList').innerHTML = items.map(item => `<button type="button" class="day-item-button" data-detail-id="${item.id}">
     <span class="day-item-kind" data-icon="${item.kind === 'assignment' ? 'book' : 'ticket'}"></span>
     <span class="day-item-copy"><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.description || `${kindLabel(item)} · 暂无补充说明`)}</span></span>
@@ -238,11 +321,31 @@ function openDayItems(dateValue) {
   mountIcons($('#dayItemsList'));
   $('#dayItemsModal').classList.add('open');
   $('#dayItemsModal').setAttribute('aria-hidden', 'false');
+  openModalLayer($('#dayItemsModal'));
+}
+
+function openDayItems(dateValue) {
+  const items = sorted(state.items.filter(item => isPending(item) && !isOverdue(item) && item.deadline.slice(0, 10) === dateValue));
+  if (!items.length) return;
+  fillItemsDialog(`${formatDate(dateValue, true)}待办`, `共 ${items.length} 个未完成事项`, items);
+}
+
+// 「查看全部」展开的是 7 天内的全部事项，大作业与活动合并在同一份清单里
+function openAllUpcoming() {
+  const items = sorted(state.items.filter(item => isPending(item) && !isOverdue(item) && daysUntil(item.deadline) >= 0 && daysUntil(item.deadline) <= 7 && matchesSearch(item)));
+  if (!items.length) return;
+  const assignmentCount = items.filter(item => item.kind === 'assignment').length;
+  const activityCount = items.length - assignmentCount;
+  const subtitle = assignmentCount && activityCount
+    ? `共 ${items.length} 个未完成事项 · 大作业 ${assignmentCount} · 活动 ${activityCount}`
+    : `共 ${items.length} 个未完成事项`;
+  fillItemsDialog('未来 7 天待办', subtitle, items);
 }
 
 function closeDayItems() {
   $('#dayItemsModal').classList.remove('open');
   $('#dayItemsModal').setAttribute('aria-hidden', 'true');
+  closeModalLayer($('#dayItemsModal'));
 }
 
 function openItemDetail(item) {
@@ -250,24 +353,30 @@ function openItemDetail(item) {
   $('#detailTitle').textContent = item.title;
   $('#detailSubtitle').textContent = `${kindLabel(item)} · ${formatDate(item.deadline, true)}`;
   const typeBadge = item.kind === 'assignment' ? `<span class="badge ${item.work_type === 'team' ? 'team' : 'personal'}">${item.work_type === 'team' ? '团队' : '个人'}</span>` : '<span class="badge progress">活动</span>';
-  const timingClass = isOverdue(item) ? 'danger' : daysUntil(item.deadline) <= 1 ? 'warning' : 'progress';
+  const timingClass = daysUntil(item.deadline) <= 1 ? 'warning' : 'progress';
   const attachments = item.attachments.length ? `<div class="detail-attachments"><strong>要求附件</strong>${item.attachments.map(file => `<button type="button" class="detail-attachment" data-detail-attachment="${file.id}"><span data-icon="file"></span><span class="detail-attachment-copy"><strong>${escapeHtml(file.original_name)}</strong><span>${formatSize(file.size)}</span></span><span data-icon="external"></span></button>`).join('')}</div>` : '';
   $('#itemDetailBody').innerHTML = `<div class="detail-badges">${typeBadge}<span class="badge ${statusClass(item)}">${escapeHtml(statusLabel(item))}</span><span class="badge ${timingClass}">${escapeHtml(timingLabel(item))}</span></div>
-    <div class="detail-grid"><div class="detail-block"><span>截止日期</span><strong>${formatDate(item.deadline, true)}</strong></div><div class="detail-block"><span>当前状态</span><strong>${escapeHtml(statusLabel(item))}</strong></div><div class="detail-block full"><span>要求说明</span><strong>${escapeHtml(item.description || '暂无补充说明')}</strong></div></div>${attachments}`;
+    <div class="detail-grid"><div class="detail-block"><span>截止时间</span><strong>${formatDate(item.deadline, true)}</strong></div><div class="detail-block"><span>当前状态</span><strong>${escapeHtml(statusLabel(item))}</strong></div><div class="detail-block full"><span>要求说明</span><strong>${escapeHtml(item.description || '暂无补充说明')}</strong></div></div>${attachments}`;
   mountIcons($('#itemDetailBody'));
   $('#dayItemsModal').classList.remove('open');
   $('#itemDetailModal').classList.add('open');
   $('#itemDetailModal').setAttribute('aria-hidden', 'false');
+  closeModalLayer($('#dayItemsModal'));
+  openModalLayer($('#itemDetailModal'));
 }
 
 function closeItemDetail(returnToDay = false) {
   $('#itemDetailModal').classList.remove('open');
   $('#itemDetailModal').setAttribute('aria-hidden', 'true');
-  if (returnToDay) $('#dayItemsModal').classList.add('open');
+  closeModalLayer($('#itemDetailModal'));
+  if (returnToDay) {
+    $('#dayItemsModal').classList.add('open');
+    openModalLayer($('#dayItemsModal'));
+  }
 }
 
 function renderAssignments() {
-  let items = state.items.filter(item => item.kind === 'assignment' && matchesSearch(item));
+  let items = state.items.filter(item => item.kind === 'assignment' && !isOverdue(item) && matchesSearch(item));
   if (state.assignmentFilter !== 'all') items = items.filter(item => item.status === state.assignmentFilter);
   items = sorted(items);
   $('#assignmentResultCount').textContent = `共 ${items.length} 项`;
@@ -279,14 +388,14 @@ function renderAssignments() {
   list.innerHTML = items.map(item => `<article class="table-row ${isCompleted(item) ? 'completed' : ''}">
     <div class="table-title"><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.description || (item.attachments.length ? `${item.attachments.length} 个附件` : '暂无要求说明'))}</span></div>
     <div><span class="badge ${item.work_type === 'team' ? 'team' : 'personal'}">${item.work_type === 'team' ? '团队' : '个人'}</span></div>
-    <div class="deadline-cell ${isOverdue(item) ? 'overdue' : ''}"><strong>${formatDate(item.deadline)}</strong><span>${timingLabel(item)}</span></div>
+    <div class="deadline-cell"><strong>${formatDate(item.deadline)}</strong><span>${timingLabel(item)}</span></div>
     <div><span class="badge ${statusClass(item)}">${statusLabel(item)}</span></div>
-    <div class="table-actions"><button class="icon-button" data-action="edit" data-id="${item.id}" title="编辑"><span data-icon="edit"></span></button><button class="icon-button" data-action="delete" data-id="${item.id}" title="删除"><span data-icon="trash"></span></button></div>
+    <div class="table-actions"><button class="icon-button" data-action="edit" data-id="${item.id}" title="编辑" aria-label="编辑“${escapeHtml(item.title)}”"><span data-icon="edit"></span></button><button class="icon-button" data-action="delete" data-id="${item.id}" title="删除" aria-label="删除“${escapeHtml(item.title)}”"><span data-icon="trash"></span></button></div>
   </article>`).join('');
 }
 
 function renderActivities() {
-  let items = state.items.filter(item => item.kind === 'activity' && matchesSearch(item));
+  let items = state.items.filter(item => item.kind === 'activity' && !isOverdue(item) && matchesSearch(item));
   if (state.activityFilter !== 'all') items = items.filter(item => item.status === state.activityFilter);
   items = sorted(items);
   $('#activityResultCount').textContent = `共 ${items.length} 项`;
@@ -297,10 +406,29 @@ function renderActivities() {
   }
   list.innerHTML = items.map(item => `<article class="table-row activity ${isCompleted(item) ? 'completed' : ''}">
     <div class="table-title"><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.description || '暂无补充说明')}</span></div>
-    <div class="deadline-cell ${isOverdue(item) ? 'overdue' : ''}"><strong>${formatDate(item.deadline)}</strong><span>${timingLabel(item)}</span></div>
+    <div class="deadline-cell"><strong>${formatDate(item.deadline)}</strong><span>${timingLabel(item)}</span></div>
     <div>${statusButton(item)}</div>
-    <div class="table-actions"><button class="icon-button" data-action="edit" data-id="${item.id}" title="编辑"><span data-icon="edit"></span></button><button class="icon-button" data-action="delete" data-id="${item.id}" title="删除"><span data-icon="trash"></span></button></div>
+    <div class="table-actions"><button class="icon-button" data-action="edit" data-id="${item.id}" title="编辑" aria-label="编辑“${escapeHtml(item.title)}”"><span data-icon="edit"></span></button><button class="icon-button" data-action="delete" data-id="${item.id}" title="删除" aria-label="删除“${escapeHtml(item.title)}”"><span data-icon="trash"></span></button></div>
   </article>`).join('');
+}
+
+function renderOverdue() {
+  const items = sorted(state.items.filter(item => isOverdue(item) && matchesSearch(item)));
+  $('#overdueResultCount').textContent = `共 ${items.length} 项`;
+  const list = $('#overdueList');
+  if (!items.length) {
+    list.innerHTML = `<div class="table-empty">${emptyState('太棒了，没有逾期事项', '超过截止时刻还未完成的事项会集中出现在这里。')}</div>`;
+    return;
+  }
+  list.innerHTML = items.map(item => {
+    const typeBadge = item.kind === 'assignment' ? `<span class="badge ${item.work_type === 'team' ? 'team' : 'personal'}">${item.work_type === 'team' ? '团队' : '个人'}</span>` : '<span class="badge progress">活动</span>';
+    return `<article class="table-row overdue">
+    <div class="table-title"><div class="row-title"><strong>${escapeHtml(item.title)}</strong>${typeBadge}</div><span>${escapeHtml(item.description || '暂无补充说明')}</span></div>
+    <div class="deadline-cell overdue"><strong>${formatDate(item.deadline)}</strong><span>${timingLabel(item)}</span></div>
+    <div>${statusButton(item)}</div>
+    <div class="table-actions"><button class="icon-button" data-action="edit" data-id="${item.id}" title="编辑" aria-label="编辑“${escapeHtml(item.title)}”"><span data-icon="edit"></span></button><button class="icon-button" data-action="delete" data-id="${item.id}" title="删除" aria-label="删除“${escapeHtml(item.title)}”"><span data-icon="trash"></span></button></div>
+  </article>`;
+  }).join('');
 }
 
 function renderStats() {
@@ -326,11 +454,111 @@ function renderStats() {
   $('#activityDoneStat').textContent = activityDone;
   $('#activityPendingStat').textContent = activities.length - activityDone;
 
-  const risks = sorted(state.items.filter(item => isPending(item) && daysUntil(item.deadline) <= 7)).slice(0, 6);
+  const active = activeHabits();
+  const habitDone = active.filter(habit => habit.checked_today).length;
+  // 与月历口径对齐：分母是今天的应打卡数、分子是今天已打卡数；累计打卡算上已归档任务的历史（终身口径）
+  $('#habitTodayStat').textContent = `${habitDone} / ${active.length}`;
+  $('#habitAllCheckinsStat').textContent = state.habits.reduce((sum, habit) => sum + habit.total, 0);
+  renderHabitCalendar();
+
+  const risks = sorted(state.items.filter(item => isPending(item) && !isOverdue(item) && daysUntil(item.deadline) <= 7)).slice(0, 6);
   $('#riskList').innerHTML = risks.length ? risks.map(item => {
     const days = daysUntil(item.deadline);
-    return `<div class="risk-item ${days < 0 ? 'danger' : days <= 1 ? 'warning' : ''}"><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(kindLabel(item))} · ${escapeHtml(timingLabel(item))}</span></div>`;
-  }).join('') : emptyState('当前没有截止风险', '逾期和未来 7 天内到期的事项会显示在这里。');
+    const tone = days <= 0 ? 'danger' : days <= 1 ? 'warning' : '';
+    return `<div class="risk-item ${tone}"><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(kindLabel(item))} · ${escapeHtml(timingLabel(item))}</span></div>`;
+  }).join('') : emptyState('当前没有截止风险', '未来 7 天内到期的事项会显示在这里，逾期事项请前往「逾期」页查看。');
+}
+
+// 月度打卡日历：caption / 月率 / 格子用同一份响应填充；搜索击键等会频繁触发 renderStats，
+// 请求序号防止旧响应晚到覆盖新数据
+let habitCalendarSeq = 0;
+
+async function renderHabitCalendar() {
+  const seq = ++habitCalendarSeq;
+  const data = await api.habits.calendar().catch(() => null);
+  if (!data || seq !== habitCalendarSeq) return;
+  // caption 与格子用同一份响应：既避免和 renderStats 的旧 state 不同步，也避免「暂无任务」与有数据同屏
+  const caption = $('#habitStatsCaption');
+  if (data.activeTasks > 0) caption.textContent = `${data.year} 年 ${data.month} 月 · ${data.activeTasks} 个任务`;
+  else if (data.monthExpected > 0) caption.textContent = `${data.year} 年 ${data.month} 月 · 任务已全部归档`;
+  else caption.textContent = '暂无任务';
+  renderHabitRate(data);
+  $('#habitCalendarGrid').innerHTML = habitCalendarCells(data);
+}
+
+// 本月打卡率：主指标 + 口径明细。分子分母都摊开写（含次数单位与统计区间），让百分比可以自己复核
+function renderHabitRate(data) {
+  const value = $('#habitMonthRate');
+  const block = $('#habitRateBlock');
+  const meta = $('#habitMonthMeta');
+  const range = $('#habitRateRange');
+  const fill = $('#habitMonthFill');
+  if (data.monthRate === null) {
+    value.textContent = '—';
+    value.classList.add('is-empty');
+    range.textContent = '';
+    meta.textContent = '本月还没有应打卡的日子';
+    fill.style.width = '0%';
+    block.title = '创建任务后，这里会按天统计本月打卡率。';
+    return;
+  }
+  const { summary } = data;
+  // 统计区间取「真正有应打卡任务的第一天 ~ 已聚合的最后一天」，而不是死写「1 日」：
+  // 任务月中才建时，1 号~建仓日没有考核义务，写成「1–30 日」会让分母 8 次看起来像 30 次
+  const counted = data.days.filter(day => day.expected > 0);
+  const firstDay = counted.length ? Number(counted[0].date.slice(8)) : 0;
+  const lastDay = counted.length ? Number(counted[counted.length - 1].date.slice(8)) : 0;
+  const rangeText = !firstDay ? '' : firstDay === lastDay ? `${data.month} 月 ${firstDay} 日` : `${data.month} 月 ${firstDay}–${lastDay} 日`;
+  value.classList.remove('is-empty');
+  value.textContent = `${data.monthRate}%`;
+  range.textContent = rangeText;
+  meta.textContent = `已打卡 ${data.monthChecked} 次 / 应打卡 ${data.monthExpected} 次`;
+  fill.style.width = `${data.monthRate}%`;
+  block.title = `本月打卡率 = 已打卡 ${data.monthChecked} 次 ÷ 应打卡 ${data.monthExpected} 次`
+    + `（只统计有任务在岗的日子${rangeText ? `，本月为 ${rangeText} 共 ${counted.length} 天` : ''}）。`
+    + ` 其中全部完成 ${summary.fullDays} 天、部分完成 ${summary.partialDays} 天、未打卡 ${summary.missedDays} 天。`;
+}
+
+function habitCalendarCells(data) {
+  const byDate = new Map(data.days.map(day => [day.date, day]));
+  const todayValue = localDate();
+  const first = new Date(data.year, data.month - 1, 1);
+  const daysInMonth = new Date(data.year, data.month, 0).getDate();
+  const monthLabel = `${data.month}月`;
+  const levelLabels = ['未打卡', '部分完成', '全部完成'];
+  const cells = [];
+  const push = (dateValue, info, extraClass) => {
+    const dayNumber = Number(dateValue.slice(8));
+    const classes = ['habit-day'];
+    let title = '';
+    if (extraClass) classes.push(extraClass);
+    if (info && info.level !== null) {
+      classes.push(`level-${info.level}`);
+      // 今天是进行中的一天：还没结束就写「未打卡」会误导读数
+      const ongoing = info.checked === 0 && dateValue === todayValue ? '今天还没打卡' : levelLabels[info.level];
+      title = `${monthLabel}${dayNumber}日 · ${ongoing}（已打卡 ${info.checked} / ${info.expected}）`;
+    } else if (info && info.stray) {
+      // 任务创建前的补卡：不计入月率，但要让用户看见自己确实打过
+      classes.push('stray');
+      title = `${monthLabel}${dayNumber}日 · 补卡（任务当天尚未创建，不计入打卡率）`;    } else if (!extraClass) {
+      // 有任务、但这天还没有任务在岗（任务尚未创建）：只留日号，并解释为什么没上色
+      classes.push('no-task');
+      title = `${monthLabel}${dayNumber}日 · 当天没有应打卡的任务`;
+    }
+    if (dateValue === todayValue) classes.push('today');
+    // 有 title 才挂 role="img"（否则读屏会播报一个无名图形）
+    const attrs = title ? ` role="img" title="${title}" aria-label="${title}"` : '';
+    cells.push(`<span class="${classes.join(' ')}"${attrs}>${dayNumber}</span>`);
+  };
+  // 周日首（与日记页月历一致）：getDay() 即月首前补位数，月末补齐整行
+  for (let back = first.getDay(); back > 0; back -= 1) push(localDate(new Date(data.year, data.month - 1, 1 - back)), null, 'other');
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const dateValue = localDate(new Date(data.year, data.month - 1, day));
+    push(dateValue, byDate.get(dateValue) || null, byDate.has(dateValue) ? '' : 'future');
+  }
+  const remainder = (first.getDay() + daysInMonth) % 7;
+  for (let forward = 1; remainder && forward <= 7 - remainder; forward += 1) push(localDate(new Date(data.year, data.month - 1, daysInMonth + forward)), null, 'other');
+  return cells.join('');
 }
 
 function renderAll() {
@@ -338,6 +566,7 @@ function renderAll() {
   renderToday();
   renderAssignments();
   renderActivities();
+  renderOverdue();
   renderStats();
   mountIcons();
 }
@@ -350,11 +579,266 @@ async function refreshItems() {
   }
 }
 
+// ---------- 日记 ----------
+// 日记不参与 renderAll 的全量重渲染，仅在进入日记页时懒加载
+
+function setDiaryStatus(kind) {
+  const element = $('#diaryStatus');
+  const texts = { empty: '输入内容后自动保存', typing: '编辑中，即将自动保存', saved: '已自动保存', failed: '保存失败，请重试' };
+  element.textContent = texts[kind] || '';
+  element.classList.toggle('saved', kind === 'saved');
+  element.classList.toggle('failed', kind === 'failed');
+}
+
+function updateDiaryAux() {
+  const content = $('#diaryContent').value;
+  $('#diaryCount').textContent = `${content.length} 字`;
+  $('#diaryDeleteButton').disabled = !content;
+}
+
+async function loadDiaryDates() {
+  const dates = await execute(() => api.diary.listDates());
+  if (dates) state.diaryDates = new Set(dates);
+}
+
+function renderDiaryCalendar() {
+  const { year, month } = state.diaryView;
+  $('#diaryMonthLabel').textContent = `${year}年${month + 1}月`;
+  const firstWeekday = new Date(year, month, 1).getDay();
+  const dayCount = new Date(year, month + 1, 0).getDate();
+  const todayValue = localDate();
+  const cells = [];
+  for (let index = 0; index < firstWeekday; index += 1) cells.push('<span class="diary-cell blank"></span>');
+  for (let day = 1; day <= dayCount; day += 1) {
+    const dateValue = localDate(new Date(year, month, day));
+    const classes = ['diary-cell'];
+    if (dateValue === todayValue) classes.push('today');
+    if (dateValue === state.diaryDate) classes.push('selected');
+    if (state.diaryDates.has(dateValue)) classes.push('has-entry');
+    cells.push(`<button type="button" class="${classes.join(' ')}" data-diary-date="${dateValue}">${day}</button>`);
+  }
+  $('#diaryGrid').innerHTML = cells.join('');
+}
+
+async function flushDiarySave() {
+  if (state.diarySaveTimer) { clearTimeout(state.diarySaveTimer); state.diarySaveTimer = null; }
+  if (!state.diaryDate) return;
+  const content = $('#diaryContent').value;
+  if (content === state.diarySavedContent) return;
+  const dateValue = state.diaryDate;
+  const result = await execute(() => api.diary.save(dateValue, content));
+  if (!result) { setDiaryStatus('failed'); return; }
+  state.diarySavedContent = content;
+  const hadEntry = state.diaryDates.has(dateValue);
+  const hasEntry = content !== '';
+  if (hadEntry !== hasEntry) {
+    if (hasEntry) state.diaryDates.add(dateValue);
+    else state.diaryDates.delete(dateValue);
+    if (state.currentPage === 'diary') renderDiaryCalendar();
+  }
+  if (state.diaryDate === dateValue) setDiaryStatus(content ? 'saved' : 'empty');
+}
+
+function scheduleDiarySave() {
+  clearTimeout(state.diarySaveTimer);
+  state.diarySaveTimer = setTimeout(flushDiarySave, 500);
+}
+
+async function openDiaryDate(dateValue) {
+  state.diaryDate = dateValue;
+  renderDiaryCalendar();
+  const date = parseDate(dateValue);
+  $('#diaryDateLabel').textContent = `${date.getMonth() + 1}月${date.getDate()}日`;
+  $('#diaryWeekdayLabel').textContent = `周${'日一二三四五六'.charAt(date.getDay())}`;
+  const entry = await execute(() => api.diary.get(dateValue));
+  if (state.diaryDate !== dateValue) return;
+  const content = entry?.content || '';
+  $('#diaryContent').value = content;
+  state.diarySavedContent = content;
+  updateDiaryAux();
+  setDiaryStatus(content ? 'saved' : 'empty');
+}
+
+async function selectDiaryDate(dateValue) {
+  await flushDiarySave();
+  await openDiaryDate(dateValue);
+}
+
+function shiftDiaryMonth(delta) {
+  let { year, month } = state.diaryView;
+  month += delta;
+  if (month < 0) { month = 11; year -= 1; }
+  if (month > 11) { month = 0; year += 1; }
+  state.diaryView = { year, month };
+  renderDiaryCalendar();
+}
+
+async function enterDiaryPage() {
+  await loadDiaryDates();
+  const base = state.diaryDate ? parseDate(state.diaryDate) : new Date();
+  state.diaryView = { year: base.getFullYear(), month: base.getMonth() };
+  await openDiaryDate(state.diaryDate || localDate());
+}
+
 function switchPage(page) {
+  if (state.currentPage === 'diary' && page !== 'diary') flushDiarySave();
   state.currentPage = page;
-  $$('.nav-item[data-page]').forEach(button => button.classList.toggle('active', button.dataset.page === page));
+  $$('.nav-item[data-page]').forEach(button => {
+    const active = button.dataset.page === page;
+    button.classList.toggle('active', active);
+    if (active) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  });
   $$('.page').forEach(view => view.classList.toggle('active', view.dataset.pageView === page));
-  $('#searchBox').classList.toggle('hidden', page === 'settings');
+  $('#searchBox').classList.toggle('hidden', page === 'settings' || page === 'diary' || page === 'habits');
+  if (page === 'diary') enterDiaryPage();
+}
+
+// ---------- 日常任务 ----------
+
+function activeHabits() {
+  return state.habits.filter(habit => !habit.archived_at);
+}
+
+function habitDotHtml(habit, point) {
+  const [, month, day] = point.date.split('-').map(Number);
+  const label = `${month}月${day}日${point.done ? '已打卡' : '未打卡'}`;
+  return `<button type="button" class="habit-dot ${point.done ? 'done' : ''}" data-habit-dot="${habit.id}" data-date="${point.date}" title="${label}" aria-label="${label}"></button>`;
+}
+
+function habitRowHtml(habit) {
+  const streakBadge = habit.streak > 0 ? `<span class="badge progress">连续 ${habit.streak} 天</span>` : '';
+  const checkIcon = '<svg class="icon sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4 4L19 6"/></svg>';
+  return `<article class="habit-row ${habit.checked_today ? 'checked' : ''}">
+    <button type="button" class="habit-check ${habit.checked_today ? 'done' : ''}" data-habit-toggle="${habit.id}" title="${habit.checked_today ? '取消今天的打卡' : '打卡'}" aria-label="${habit.checked_today ? '取消今天的打卡' : '打卡'}：${escapeHtml(habit.title)}" aria-pressed="${habit.checked_today ? 'true' : 'false'}">${habit.checked_today ? checkIcon : ''}</button>
+    <div class="habit-copy">
+      <div class="row-title"><strong>${escapeHtml(habit.title)}</strong>${streakBadge}</div>
+      <div class="habit-sub"><span class="habit-dots">${habit.last7.map(point => habitDotHtml(habit, point)).join('')}</span><span class="habit-total">累计 ${habit.total} 天</span></div>
+    </div>
+    <div class="table-actions">
+      <button class="icon-button" data-habit-edit="${habit.id}" title="编辑" aria-label="编辑“${escapeHtml(habit.title)}”"><span data-icon="edit"></span></button>
+      <button class="icon-button" data-habit-archive="${habit.id}" title="归档" aria-label="归档“${escapeHtml(habit.title)}”"><span data-icon="folder"></span></button>
+      <button class="icon-button" data-habit-delete="${habit.id}" title="删除" aria-label="删除“${escapeHtml(habit.title)}”"><span data-icon="trash"></span></button>
+    </div>
+  </article>`;
+}
+
+function renderHabitsPage() {
+  const active = activeHabits();
+  const done = active.filter(habit => habit.checked_today).length;
+  $('#habitProgressLabel').textContent = `${done} / ${active.length}`;
+  const percent = active.length ? Math.round(done / active.length * 100) : 0;
+  $('#habitProgressFill').style.width = `${percent}%`;
+
+  const list = $('#habitList');
+  if (!active.length) {
+    list.innerHTML = `<div class="panel habit-empty">${emptyState('还没有日常任务', '添加一个每天要坚持的小任务，比如背单词或锻炼。', '新增任务', 'habit')}</div>`;
+  } else {
+    list.innerHTML = active.map(habitRowHtml).join('');
+  }
+
+  const archived = state.habits.filter(habit => habit.archived_at);
+  $('#habitArchivedSection').classList.toggle('hidden', !archived.length);
+  $('#habitArchivedToggle').textContent = `已归档（${archived.length}）`;
+  $('#habitArchivedList').classList.toggle('hidden', !state.habitArchivedOpen);
+  $('#habitArchivedList').innerHTML = archived.map(habit => `<div class="habit-archived-row">
+    <div class="habit-archived-copy"><strong>${escapeHtml(habit.title)}</strong><span>累计打卡 ${habit.total} 天${habit.note ? ` · ${escapeHtml(habit.note)}` : ''}</span></div>
+    <div class="table-actions">
+      <button class="text-button" data-habit-restore="${habit.id}">恢复</button>
+      <button class="icon-button" data-habit-delete="${habit.id}" title="彻底删除" aria-label="彻底删除“${escapeHtml(habit.title)}”"><span data-icon="trash"></span></button>
+    </div>
+  </div>`).join('');
+  mountIcons(list);
+  mountIcons($('#habitArchivedList'));
+}
+
+function renderHabitCard() {
+  const panel = $('#habitCardPanel');
+  const active = activeHabits();
+  if (!active.length) { panel.classList.add('hidden'); return; }
+  panel.classList.remove('hidden');
+  const pendingHabits = active.filter(habit => !habit.checked_today);
+  $('#habitCardCaption').textContent = `已打卡 ${active.length - pendingHabits.length} / ${active.length}`;
+  const list = $('#habitCardList');
+  if (!pendingHabits.length) {
+    list.innerHTML = '<div class="habit-card-alldone"><span data-icon="check"></span><p>今日打卡已全部完成</p></div>';
+  } else {
+    list.innerHTML = pendingHabits.map(habit => `<button type="button" class="habit-card-row" data-habit-toggle="${habit.id}" aria-label="打卡：${escapeHtml(habit.title)}">
+      <span class="habit-card-ring" aria-hidden="true"></span>
+      <span class="habit-card-copy"><strong>${escapeHtml(habit.title)}</strong>${habit.streak ? `<span>连续 ${habit.streak} 天</span>` : '<span>点一下完成打卡</span>'}</span>
+    </button>`).join('');
+  }
+  mountIcons(list);
+}
+
+function renderHabitViews() {
+  renderNavigation();
+  renderHabitCard();
+  renderHabitsPage();
+  renderStats();
+  mountIcons();
+}
+
+async function refreshHabits() {
+  const habits = await execute(() => api.habits.list());
+  if (habits) {
+    state.habits = habits;
+    renderHabitViews();
+  }
+}
+
+function openHabitModal(habit = null) {
+  $('#habitForm').reset();
+  $('#habitId').value = habit?.id || '';
+  $('#habitModalTitle').textContent = habit ? '编辑日常任务' : '新增日常任务';
+  $('#habitTitle').value = habit?.title || '';
+  $('#habitNote').value = habit?.note || '';
+  $('#habitModal').classList.add('open');
+  $('#habitModal').setAttribute('aria-hidden', 'false');
+  openModalLayer($('#habitModal'));
+  setTimeout(() => $('#habitTitle').focus(), 0);
+}
+
+function closeHabitModal() {
+  $('#habitModal').classList.remove('open');
+  $('#habitModal').setAttribute('aria-hidden', 'true');
+  closeModalLayer($('#habitModal'));
+}
+
+async function saveHabit(event) {
+  event.preventDefault();
+  const id = Number($('#habitId').value) || null;
+  const input = { title: $('#habitTitle').value, note: $('#habitNote').value };
+  const habits = await execute(() => id ? api.habits.update(id, input) : api.habits.create(input), id ? '任务已更新' : '任务已添加');
+  if (!habits) return;
+  state.habits = habits;
+  closeHabitModal();
+  renderHabitViews();
+}
+
+async function toggleHabitCheckin(id, date) {
+  const result = await execute(() => api.habits.toggleCheckin(id, date));
+  if (result) await refreshHabits();
+}
+
+async function setHabitArchived(id, archived) {
+  const habit = state.habits.find(entry => entry.id === id);
+  if (!habit) return;
+  const message = archived ? `已归档「${habit.title}」` : '任务已恢复';
+  const habits = await execute(() => api.habits.setArchived(id, archived), message);
+  if (habits) {
+    state.habits = habits;
+    renderHabitViews();
+  }
+}
+
+async function deleteHabit(id) {
+  const habit = state.habits.find(entry => entry.id === id);
+  if (!habit) return;
+  const confirmed = await askConfirmation('删除这个日常任务？', `“${habit.title}”和它的全部打卡记录将被永久删除。想保留记录可以改用归档。`, '删除');
+  if (!confirmed) return;
+  const removed = await execute(() => api.habits.remove(id), '任务已删除');
+  if (removed) await refreshHabits();
 }
 
 function setModalKind(kind) {
@@ -371,6 +855,23 @@ function setModalKind(kind) {
   if ([...status.options].some(option => option.value === current)) status.value = current;
 }
 
+function updateDeadlineAux() {
+  const dateValue = $('#itemDeadlineDate').value;
+  $$('#deadlineChips button').forEach(button => {
+    const target = new Date();
+    target.setDate(target.getDate() + Number(button.dataset.dayOffset));
+    button.classList.toggle('active', Boolean(dateValue) && localDate(target) === dateValue);
+  });
+  const preview = $('#deadlinePreview');
+  if (!dateValue) { preview.textContent = '请选择截止日期'; preview.className = 'deadline-preview'; return; }
+  const date = parseDate(dateValue);
+  const days = daysUntil(dateValue);
+  const weekday = `周${'日一二三四五六'.charAt(date.getDay())}`;
+  const hint = days < 0 ? `已过去 ${-days} 天` : days === 0 ? '就是今天' : days === 1 ? '还有 1 天' : `还有 ${days} 天`;
+  preview.textContent = `${date.getMonth() + 1}月${date.getDate()}日 ${weekday} · ${hint}`;
+  preview.className = `deadline-preview ${days < 0 ? 'urgent' : days <= 1 ? 'soon' : ''}`;
+}
+
 function openItemModal(kind = 'assignment', item = null) {
   $('#itemForm').reset();
   $('#itemId').value = item?.id || '';
@@ -381,18 +882,34 @@ function openItemModal(kind = 'assignment', item = null) {
   $('#itemModalSubtitle').textContent = item ? '修改后会立即保存到本地' : '记录一个新的截止日期';
   $('#itemTitle').value = item?.title || '';
   $('#itemDescription').value = item?.description || '';
-  $('#itemDeadline').value = item?.deadline || localDate();
+  const [deadlineDate, deadlineTime = '23:59'] = (item ? item.deadline : `${localDate()} 23:59`).split(' ');
+  $('#itemDeadlineDate').value = deadlineDate;
+  $('#itemDeadlineTime').value = deadlineTime;
+  updateDeadlineAux();
   if (item?.work_type) $('#itemWorkType').value = item.work_type;
   $('#itemStatus').value = item?.status || (state.modalKind === 'assignment' ? 'not_started' : 'not_completed');
   renderModalAttachments();
   $('#itemModal').classList.add('open');
   $('#itemModal').setAttribute('aria-hidden', 'false');
+  state.itemFormBaseline = itemFormSignature();
+  openModalLayer($('#itemModal'));
   setTimeout(() => $('#itemTitle').focus(), 0);
 }
 
 function closeItemModal() {
   $('#itemModal').classList.remove('open');
   $('#itemModal').setAttribute('aria-hidden', 'true');
+  state.itemFormBaseline = null;
+  closeModalLayer($('#itemModal'));
+}
+
+function itemFormSignature() {
+  return [$('#itemTitle').value, $('#itemDescription').value, $('#itemDeadlineDate').value,
+    $('#itemDeadlineTime').value, $('#itemStatus').value, $('#itemWorkType').value].join('\u0001');
+}
+
+function isItemFormDirty() {
+  return Boolean(state.itemFormBaseline) && (itemFormSignature() !== state.itemFormBaseline || state.selectedFiles.length > 0);
 }
 
 function formatSize(bytes) {
@@ -403,8 +920,8 @@ function formatSize(bytes) {
 
 function renderModalAttachments() {
   const list = $('#attachmentList');
-  const existing = state.existingAttachments.map(file => `<div class="attachment-item"><span data-icon="file"></span><div class="attachment-copy"><strong>${escapeHtml(file.original_name)}</strong><span>${formatSize(file.size)}</span></div><div class="attachment-actions"><button type="button" class="icon-button" data-attachment-open="${file.id}" title="打开"><span data-icon="external"></span></button><button type="button" class="icon-button" data-attachment-delete="${file.id}" title="删除"><span data-icon="trash"></span></button></div></div>`);
-  const selected = state.selectedFiles.map((file, index) => `<div class="attachment-item"><span data-icon="file"></span><div class="attachment-copy"><strong>${escapeHtml(file.name)}</strong><span>${formatSize(file.size)} · 待保存</span></div><div class="attachment-actions"><button type="button" class="icon-button" data-selected-delete="${index}" title="移除"><span data-icon="close"></span></button></div></div>`);
+  const existing = state.existingAttachments.map(file => `<div class="attachment-item"><span data-icon="file"></span><div class="attachment-copy"><strong>${escapeHtml(file.original_name)}</strong><span>${formatSize(file.size)}</span></div><div class="attachment-actions"><button type="button" class="icon-button" data-attachment-open="${file.id}" title="打开" aria-label="打开附件“${escapeHtml(file.original_name)}”"><span data-icon="external"></span></button><button type="button" class="icon-button" data-attachment-delete="${file.id}" title="删除" aria-label="删除附件“${escapeHtml(file.original_name)}”"><span data-icon="trash"></span></button></div></div>`);
+  const selected = state.selectedFiles.map((file, index) => `<div class="attachment-item"><span data-icon="file"></span><div class="attachment-copy"><strong>${escapeHtml(file.name)}</strong><span>${formatSize(file.size)} · 待保存</span></div><div class="attachment-actions"><button type="button" class="icon-button" data-selected-delete="${index}" title="移除" aria-label="移除待保存附件“${escapeHtml(file.name)}”"><span data-icon="close"></span></button></div></div>`);
   list.innerHTML = [...existing, ...selected].join('') || '<div class="attachment-empty">尚未选择附件</div>';
   mountIcons(list);
 }
@@ -415,12 +932,15 @@ function askConfirmation(title, message, acceptLabel = '确认') {
   $('#confirmAccept').textContent = acceptLabel;
   $('#confirmModal').classList.add('open');
   $('#confirmModal').setAttribute('aria-hidden', 'false');
+  openModalLayer($('#confirmModal'));
+  setTimeout(() => $('#confirmCancel').focus(), 0);
   return new Promise(resolve => { state.confirmResolver = resolve; });
 }
 
 function resolveConfirmation(value) {
   $('#confirmModal').classList.remove('open');
   $('#confirmModal').setAttribute('aria-hidden', 'true');
+  closeModalLayer($('#confirmModal'));
   state.confirmResolver?.(value);
   state.confirmResolver = null;
 }
@@ -432,7 +952,7 @@ async function saveItem(event) {
     kind: state.modalKind,
     title: $('#itemTitle').value,
     description: $('#itemDescription').value,
-    deadline: $('#itemDeadline').value,
+    deadline: `${$('#itemDeadlineDate').value} ${$('#itemDeadlineTime').value || '23:59'}`,
     status: $('#itemStatus').value,
     workType: state.modalKind === 'assignment' ? $('#itemWorkType').value : null
   };
@@ -453,8 +973,10 @@ async function handleItemAction(button) {
   if (!item) return;
   if (button.dataset.action === 'edit') openItemModal(item.kind, item);
   if (button.dataset.action === 'status') {
+    state.justCompletedId = nextStatus(item) === 'completed' ? id : null;
     const updated = await execute(() => api.items.setStatus(id, nextStatus(item)), '状态已更新');
     if (updated) await refreshItems();
+    state.justCompletedId = null;
   }
   if (button.dataset.action === 'delete') {
     const confirmed = await askConfirmation('删除这个事项？', `“${item.title}”及其全部附件将被永久删除。`, '删除');
@@ -478,6 +1000,16 @@ function bindEvents() {
   $$('.nav-item[data-page]').forEach(button => button.addEventListener('click', () => switchPage(button.dataset.page)));
   $$('.new-kind-button').forEach(button => button.addEventListener('click', () => openItemModal(button.dataset.kind)));
   $$('.kind-segment button').forEach(button => button.addEventListener('click', () => setModalKind(button.dataset.kind)));
+  $('#deadlineChips').addEventListener('click', event => {
+    const chip = event.target.closest('button[data-day-offset]');
+    if (!chip) return;
+    const target = new Date();
+    target.setDate(target.getDate() + Number(chip.dataset.dayOffset));
+    $('#itemDeadlineDate').value = localDate(target);
+    updateDeadlineAux();
+  });
+  $('#itemDeadlineDate').addEventListener('input', updateDeadlineAux);
+  $('#itemDeadlineTime').addEventListener('input', updateDeadlineAux);
   $$('.modal-close').forEach(button => button.addEventListener('click', closeItemModal));
   $('#itemModal').addEventListener('click', event => { if (event.target === $('#itemModal')) closeItemModal(); });
   $('#itemForm').addEventListener('submit', saveItem);
@@ -504,11 +1036,28 @@ function bindEvents() {
 
   $('#searchInput').addEventListener('input', event => { state.search = event.target.value.trim(); renderAll(); });
   document.addEventListener('keydown', event => {
+    if (event.key === 'Tab' && modalStack.length) {
+      const top = modalStack[modalStack.length - 1].backdrop;
+      const items = focusableIn(top);
+      if (!items.length) { event.preventDefault(); return; }
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (!top.contains(document.activeElement)) { event.preventDefault(); first.focus(); return; }
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      return;
+    }
     if (event.key === 'Escape') {
-      closeItemModal();
-      closeItemDetail();
-      closeDayItems();
-      if (state.confirmResolver) resolveConfirmation(false);
+      if (!modalStack.length) return;
+      event.preventDefault();
+      if (state.confirmResolver) { resolveConfirmation(false); return; }
+      if ($('#itemModal').classList.contains('open') && isItemFormDirty()) {
+        askConfirmation('放弃未保存的修改？', '关闭后本次填写的内容不会保存。', '放弃修改')
+          .then(confirmed => { if (confirmed) closeItemModal(); });
+        return;
+      }
+      closeTopModal();
+      return;
     }
     if (event.ctrlKey && event.key.toLowerCase() === 'k') { event.preventDefault(); $('#searchInput').focus(); }
   });
@@ -517,14 +1066,22 @@ function bindEvents() {
     const button = event.target.closest('button[data-filter]');
     if (!button) return;
     state.assignmentFilter = button.dataset.filter;
-    $$('#assignmentFilters button').forEach(entry => entry.classList.toggle('active', entry === button));
+    $$('#assignmentFilters button').forEach(entry => {
+      const active = entry === button;
+      entry.classList.toggle('active', active);
+      entry.setAttribute('aria-pressed', String(active));
+    });
     renderAssignments(); mountIcons($('#assignmentList'));
   });
   $('#activityFilters').addEventListener('click', event => {
     const button = event.target.closest('button[data-filter]');
     if (!button) return;
     state.activityFilter = button.dataset.filter;
-    $$('#activityFilters button').forEach(entry => entry.classList.toggle('active', entry === button));
+    $$('#activityFilters button').forEach(entry => {
+      const active = entry === button;
+      entry.classList.toggle('active', active);
+      entry.setAttribute('aria-pressed', String(active));
+    });
     renderActivities(); mountIcons($('#activityList'));
   });
 
@@ -532,7 +1089,10 @@ function bindEvents() {
     const actionButton = event.target.closest('[data-action][data-id]');
     if (actionButton) handleItemAction(actionButton);
     const emptyAdd = event.target.closest('.empty-add');
-    if (emptyAdd) openItemModal(emptyAdd.dataset.kind || 'assignment');
+    if (emptyAdd) {
+      if (emptyAdd.dataset.kind === 'habit') openHabitModal();
+      else openItemModal(emptyAdd.dataset.kind || 'assignment');
+    }
   });
 
   $('#selectAttachmentButton').addEventListener('click', async () => {
@@ -556,7 +1116,7 @@ function bindEvents() {
     }
   });
 
-  $('#showAllButton').addEventListener('click', () => switchPage('assignments'));
+  $('#showAllButton').addEventListener('click', openAllUpcoming);
   $('#notificationButton').addEventListener('click', () => { switchPage('settings'); showToast(state.notificationsEnabled ? '系统通知已开启' : '系统通知已关闭'); });
   $('#notificationToggle').addEventListener('change', async event => {
     const enabled = await execute(() => api.settings.setNotifications(event.target.checked), event.target.checked ? '系统通知已开启' : '系统通知已关闭');
@@ -571,27 +1131,107 @@ function bindEvents() {
     if (path) showToast(`备份已保存：${path}`);
   });
   $('#restoreButton').addEventListener('click', async () => {
-    const confirmed = await askConfirmation('从备份恢复？', '恢复会覆盖当前全部事项和附件。建议先导出当前数据备份。', '选择备份');
+    const confirmed = await askConfirmation('从备份恢复？', '恢复会覆盖当前全部事项、附件和日记。建议先导出当前数据备份。', '选择备份');
     if (!confirmed) return;
     const restored = await execute(() => api.data.restore());
-    if (restored) { showToast('备份已恢复'); await refreshItems(); }
+    if (restored) { showToast('备份已恢复'); state.diaryDates = new Set(); await Promise.all([refreshItems(), refreshHabits()]); }
   });
   $('#clearDataButton').addEventListener('click', async () => {
-    const first = await askConfirmation('清空全部数据？', '所有事项和附件将被永久删除。此操作无法撤销。', '继续');
+    const first = await askConfirmation('清空全部数据？', '所有事项、附件和日记将被永久删除。此操作无法撤销。', '继续');
     if (!first) return;
     const second = await askConfirmation('再次确认清空', '请确认你已经备份了需要保留的数据。', '永久清空');
     if (!second) return;
     const cleared = await execute(() => api.data.clear(), '全部数据已清空');
-    if (cleared) await refreshItems();
+    if (cleared) { state.diaryDates = new Set(); await Promise.all([refreshItems(), refreshHabits()]); }
   });
   $('#openDataFolderButton').addEventListener('click', () => execute(() => api.settings.showDataFolder()));
+
+  $('#diaryGrid').addEventListener('click', event => {
+    const cell = event.target.closest('[data-diary-date]');
+    if (cell) selectDiaryDate(cell.dataset.diaryDate);
+  });
+  $('#diaryPrevMonth').addEventListener('click', () => shiftDiaryMonth(-1));
+  $('#diaryNextMonth').addEventListener('click', () => shiftDiaryMonth(1));
+  $('#diaryTodayButton').addEventListener('click', () => selectDiaryDate(localDate()));
+  $('#diaryContent').addEventListener('input', () => {
+    updateDiaryAux();
+    setDiaryStatus('typing');
+    scheduleDiarySave();
+  });
+  $('#diaryContent').addEventListener('blur', () => flushDiarySave());
+  $('#diaryDeleteButton').addEventListener('click', async () => {
+    const dateValue = state.diaryDate;
+    if (!dateValue || !$('#diaryContent').value) return;
+    const confirmed = await askConfirmation('删除这篇日记？', `${formatDate(dateValue, true)}的日记内容将被永久删除。`, '删除');
+    if (!confirmed) return;
+    const removed = await execute(() => api.diary.remove(dateValue), '日记已删除');
+    if (!removed) return;
+    state.diaryDates.delete(dateValue);
+    if (state.diaryDate === dateValue) {
+      $('#diaryContent').value = '';
+      state.diarySavedContent = '';
+      updateDiaryAux();
+      setDiaryStatus('empty');
+    }
+    renderDiaryCalendar();
+  });
+
+  $('#newHabitButton').addEventListener('click', () => openHabitModal());
+  $('#habitForm').addEventListener('submit', saveHabit);
+  $$('.habit-modal-close').forEach(button => button.addEventListener('click', closeHabitModal));
+  $('#habitModal').addEventListener('click', event => { if (event.target === $('#habitModal')) closeHabitModal(); });
+  $('#habitList').addEventListener('click', event => {
+    const toggle = event.target.closest('[data-habit-toggle]');
+    if (toggle) { toggleHabitCheckin(Number(toggle.dataset.habitToggle), localDate()); return; }
+    const dot = event.target.closest('[data-habit-dot]');
+    if (dot) { toggleHabitCheckin(Number(dot.dataset.habitDot), dot.dataset.date); return; }
+    const edit = event.target.closest('[data-habit-edit]');
+    if (edit) {
+      const habit = state.habits.find(entry => entry.id === Number(edit.dataset.habitEdit));
+      if (habit) openHabitModal(habit);
+      return;
+    }
+    const archive = event.target.closest('[data-habit-archive]');
+    if (archive) { setHabitArchived(Number(archive.dataset.habitArchive), true); return; }
+    const remove = event.target.closest('[data-habit-delete]');
+    if (remove) deleteHabit(Number(remove.dataset.habitDelete));
+  });
+  $('#habitCardList').addEventListener('click', event => {
+    const toggle = event.target.closest('[data-habit-toggle]');
+    if (toggle) toggleHabitCheckin(Number(toggle.dataset.habitToggle), localDate());
+  });
+  $('#habitArchivedToggle').addEventListener('click', () => {
+    state.habitArchivedOpen = !state.habitArchivedOpen;
+    $('#habitArchivedList').classList.toggle('hidden', !state.habitArchivedOpen);
+  });
+  $('#habitArchivedList').addEventListener('click', event => {
+    const restore = event.target.closest('[data-habit-restore]');
+    if (restore) { setHabitArchived(Number(restore.dataset.habitRestore), false); return; }
+    const remove = event.target.closest('[data-habit-delete]');
+    if (remove) deleteHabit(Number(remove.dataset.habitDelete));
+  });
+  api.habits.onChanged(refreshHabits);
+  window.addEventListener('beforeunload', () => flushDiarySave());
 }
 
 async function initialize() {
   mountIcons();
   updateCurrentDate();
   bindEvents();
-  await Promise.all([refreshItems(), initializeSettings()]);
+  $$('.nav-item[data-page]').forEach(button => {
+    if (button.classList.contains('active')) button.setAttribute('aria-current', 'page');
+  });
+  await Promise.all([refreshItems(), initializeSettings(), refreshHabits()]);
+  // 逾期状态随时间推移产生，每分钟检查一次；仅在跨天或逾期集合变化时才重渲染，避免打扰进行中的操作
+  let lastTickSignature = '';
+  setInterval(() => {
+    const signature = `${localDate()}|${state.items.filter(isOverdue).map(item => item.id).join(',')}`;
+    if (signature === lastTickSignature) return;
+    lastTickSignature = signature;
+    updateCurrentDate();
+    renderAll();
+    refreshHabits();
+  }, 60000);
 }
 
 initialize();
