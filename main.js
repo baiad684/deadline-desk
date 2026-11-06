@@ -55,6 +55,23 @@ const AI_ERROR_TABLE = {
   unknown: { message: '处理失败，请重试', retryable: true }
 };
 
+const AI_ASSIGNMENT_STATUSES = ['not_started', 'in_progress', 'completed'];
+const AI_ACTIVITY_STATUSES = ['not_completed', 'completed'];
+const AI_STATUS_BY_KIND = { assignment: AI_ASSIGNMENT_STATUSES, activity: AI_ACTIVITY_STATUSES };
+const AI_DEFAULT_STATUS_BY_KIND = { assignment: 'not_started', activity: 'not_completed' };
+const AI_DUPLICATE_TIME_WINDOW_MS = 60 * 60 * 1000;
+const AI_DUPLICATE_DICE_THRESHOLD = 0.75;
+const AI_CREATE_EMPTY_MESSAGE = '没有识别到可新增的事项。';
+const AI_UPDATE_NO_MATCH_MESSAGE = '没有找到匹配的事项。';
+const AI_UPDATE_KIND_MESSAGE = '助手不能修改事项类型，请到对应列表的编辑表单操作。';
+const AI_UPDATE_NO_CHANGES_MESSAGE = '请说明要修改的内容。';
+const AI_DELETE_NO_MATCH_MESSAGE = '没有找到匹配的事项。';
+const AI_CLEANUP_NO_RANGE_MESSAGE = '请补充清理范围（例如上个月、本月、今年、某个具体月份或全部已完成）。';
+const AI_CLEANUP_EMPTY_MESSAGE = '没有符合条件的已完成事项。';
+const AI_NOTE_MISSING_IDS = '未找到事项 id：';
+const AI_NOTE_OUT_OF_RANGE_IDS = '超出本次可操作范围的事项 id：';
+const AI_CREATE_IGNORED_REASONS = { kind: '事项类型无效', title: '缺少明确标题', shape: '候选格式无效' };
+
 function getPaths() {
   const root = process.env.DEADLINE_DESK_DATA_DIR || app.getPath('userData');
   return {
@@ -982,8 +999,7 @@ function parseLocalDateTime(deadline) {
   return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), Number(match[4]), Number(match[5])).getTime();
 }
 
-function buildAssistantSummary(now) {
-  const rows = readItemsForAssistant();
+function buildAssistantSummary(now, rows = readItemsForAssistant()) {
   const nowValue = now.getTime();
   const distanceOf = item => {
     const distance = Math.abs(parseLocalDateTime(item.deadline) - nowValue);
@@ -1182,6 +1198,440 @@ function normalizeAssistantIntent(payload) {
   return { intent, message: typeof payload.message === 'string' ? payload.message : '' };
 }
 
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function statusesForKind(kind) {
+  return Object.prototype.hasOwnProperty.call(AI_STATUS_BY_KIND, kind) ? AI_STATUS_BY_KIND[kind] : [];
+}
+
+function defaultStatusForKind(kind) {
+  const status = AI_DEFAULT_STATUS_BY_KIND[kind];
+  return typeof status === 'string' ? status : null;
+}
+
+function isStatusAllowed(kind, status) {
+  return statusesForKind(kind).includes(status);
+}
+
+function normalizeAssistantTitle(title) {
+  let text = String(title).normalize('NFKC').toLowerCase().replace(/\s|\p{P}|\p{S}/gu, '');
+  for (const prefix of ['关于', '报名', '参加']) {
+    if (text.startsWith(prefix)) {
+      text = text.slice(prefix.length);
+      break;
+    }
+  }
+  for (const suffix of ['课程设计', '课程报告', '实验报告', '大作业', '比赛', '报名', '活动', '作业', '课设', '报告']) {
+    if (text.endsWith(suffix)) {
+      text = text.slice(0, -suffix.length);
+      break;
+    }
+  }
+  return text;
+}
+
+function buildTitleBigrams(text) {
+  if (typeof text !== 'string' || text.length < 2) return [];
+  const bigrams = [];
+  for (let index = 0; index < text.length - 1; index += 1) bigrams.push(text.slice(index, index + 2));
+  return bigrams;
+}
+
+function diceCoefficient(leftBigrams, rightBigrams) {
+  const total = leftBigrams.length + rightBigrams.length;
+  if (total === 0) return 0;
+  const counts = new Map();
+  for (const gram of leftBigrams) counts.set(gram, (counts.get(gram) || 0) + 1);
+  let overlap = 0;
+  for (const gram of rightBigrams) {
+    const count = counts.get(gram);
+    if (count > 0) {
+      counts.set(gram, count - 1);
+      overlap += 1;
+    }
+  }
+  return (2 * overlap) / total;
+}
+
+function hasTitleSignal(leftTitle, rightTitle) {
+  const left = normalizeAssistantTitle(leftTitle);
+  const right = normalizeAssistantTitle(rightTitle);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  const shorter = left.length <= right.length ? left : right;
+  const longer = left.length <= right.length ? right : left;
+  if (shorter.length >= 3 && longer.includes(shorter)) return true;
+  if (left.length >= 3 && right.length >= 3
+    && diceCoefficient(buildTitleBigrams(left), buildTitleBigrams(right)) >= AI_DUPLICATE_DICE_THRESHOLD) return true;
+  return false;
+}
+
+function isDeadlineClose(leftDeadline, rightDeadline, windowMs) {
+  const left = parseLocalDateTime(leftDeadline);
+  const right = parseLocalDateTime(rightDeadline);
+  if (Number.isNaN(left) || Number.isNaN(right)) return false;
+  return Math.abs(left - right) <= windowMs;
+}
+
+function composePlanMessage(modelMessage, notes) {
+  const parts = [];
+  if (typeof modelMessage === 'string' && modelMessage.trim()) parts.push(modelMessage.trim());
+  for (const note of Array.isArray(notes) ? notes : []) {
+    if (typeof note === 'string' && note.trim()) parts.push(note.trim());
+  }
+  return parts.join('；');
+}
+
+function parseTargetIds(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const ids = [];
+  for (const item of value) {
+    if (typeof item !== 'number' && typeof item !== 'string') continue;
+    const number = Number(item);
+    if (!Number.isSafeInteger(number) || number <= 0) continue;
+    if (seen.has(number)) continue;
+    seen.add(number);
+    ids.push(number);
+  }
+  return ids;
+}
+
+function classifyTargetIds(targetIds, allItems, summaryItems) {
+  const allIds = new Set((Array.isArray(allItems) ? allItems : []).map(item => item.id));
+  const summaryIds = new Set((Array.isArray(summaryItems) ? summaryItems : []).map(item => item.id));
+  const missingIds = [];
+  const outOfRangeIds = [];
+  const resolvedIds = [];
+  for (const id of targetIds) {
+    if (!allIds.has(id)) missingIds.push(id);
+    else if (!summaryIds.has(id)) outOfRangeIds.push(id);
+    else resolvedIds.push(id);
+  }
+  return { missingIds, outOfRangeIds, resolvedIds };
+}
+
+function buildPlanNotes(missingIds, outOfRangeIds) {
+  const notes = [];
+  if (missingIds.length > 0) notes.push(AI_NOTE_MISSING_IDS + missingIds.join('、'));
+  if (outOfRangeIds.length > 0) notes.push(AI_NOTE_OUT_OF_RANGE_IDS + outOfRangeIds.join('、'));
+  return notes;
+}
+
+function collectPlanTargetIds(resolvedIds, allItems) {
+  const rows = Array.isArray(allItems) ? allItems : [];
+  const titles = new Set();
+  for (const id of resolvedIds) {
+    const row = rows.find(item => item.id === id);
+    if (row) titles.add(String(row.title).trim());
+  }
+  const extras = rows
+    .filter(row => !resolvedIds.includes(row.id) && titles.has(String(row.title).trim()))
+    .sort((a, b) => a.id - b.id)
+    .map(row => row.id);
+  return resolvedIds.concat(extras);
+}
+
+function isAmbiguousTitle(title, allItems) {
+  const normalized = String(title).trim();
+  const count = (Array.isArray(allItems) ? allItems : []).filter(item => String(item.title).trim() === normalized).length;
+  return count >= 2;
+}
+
+function detectDuplicateCandidate(candidate, items) {
+  const list = Array.isArray(items) ? items : [];
+  const title = typeof candidate?.title === 'string' ? candidate.title : '';
+  const deadlineMs = parseLocalDateTime(candidate?.deadline);
+  let best = null;
+  let bestRank = Infinity;
+  let bestDistance = Infinity;
+  for (const item of list) {
+    const titleHit = title !== '' && hasTitleSignal(title, item.title);
+    const timeHit = isDeadlineClose(candidate?.deadline, item.deadline, AI_DUPLICATE_TIME_WINDOW_MS);
+    if (!titleHit && !timeHit) continue;
+    const rank = titleHit ? 0 : 1;
+    const itemMs = parseLocalDateTime(item.deadline);
+    const distance = Number.isNaN(deadlineMs) || Number.isNaN(itemMs) ? Infinity : Math.abs(deadlineMs - itemMs);
+    const better = best === null
+      || rank < bestRank
+      || (rank === bestRank && distance < bestDistance)
+      || (rank === bestRank && distance === bestDistance && item.id < best.id);
+    if (better) {
+      best = item;
+      bestRank = rank;
+      bestDistance = distance;
+    }
+  }
+  return best ? { id: best.id, title: best.title, deadline: best.deadline } : null;
+}
+
+function normalizeCreatePlan(options) {
+  const { payload, allItems, now, omittedCount } = options;
+  const source = isPlainObject(payload?.create) ? payload.create : null;
+  const candidates = source && Array.isArray(source.candidates) ? source.candidates : [];
+  const modelIgnored = source && Array.isArray(source.ignored) ? source.ignored : [];
+  const ignored = [];
+  for (const entry of modelIgnored) {
+    if (!isPlainObject(entry)) continue;
+    if (typeof entry.reason !== 'string' || entry.reason.trim() === '') continue;
+    ignored.push({ text: typeof entry.text === 'string' ? entry.text.trim() : '', reason: entry.reason.trim() });
+  }
+  const normalized = [];
+  candidates.forEach((raw, index) => {
+    if (!isPlainObject(raw)) {
+      ignored.push({ text: '', reason: AI_CREATE_IGNORED_REASONS.shape });
+      return;
+    }
+    if (!['assignment', 'activity'].includes(raw.kind)) {
+      ignored.push({ text: typeof raw.title === 'string' ? raw.title.trim() : '', reason: AI_CREATE_IGNORED_REASONS.kind });
+      return;
+    }
+    if (typeof raw.title !== 'string' || raw.title.trim() === '') {
+      ignored.push({ text: '', reason: AI_CREATE_IGNORED_REASONS.title });
+      return;
+    }
+    const kind = raw.kind;
+    const title = raw.title.trim();
+    const titleTooLong = title.length > 120;
+    let deadline = null;
+    let deadlineIssue = null;
+    if (raw.deadline === null || raw.deadline === undefined
+      || (typeof raw.deadline === 'string' && raw.deadline.trim() === '')) {
+      deadlineIssue = 'missing';
+    } else if (typeof raw.deadline !== 'string') {
+      deadlineIssue = 'invalid';
+    } else {
+      try {
+        deadline = validateDeadline(raw.deadline.trim());
+      } catch {
+        deadline = null;
+        deadlineIssue = 'invalid';
+      }
+    }
+    let status = null;
+    let statusInvalid = false;
+    if (raw.status === null || raw.status === undefined
+      || (typeof raw.status === 'string' && raw.status.trim() === '')) {
+      status = defaultStatusForKind(kind);
+    } else if (typeof raw.status === 'string' && isStatusAllowed(kind, raw.status.trim())) {
+      status = raw.status.trim();
+    } else {
+      statusInvalid = true;
+    }
+    const workType = kind === 'assignment' ? (raw.workType === 'team' ? 'team' : 'personal') : null;
+    const description = typeof raw.description === 'string' ? raw.description.trim().slice(0, 10000) : '';
+    const expired = deadlineIssue === null && parseLocalDateTime(deadline) < now.getTime();
+    const duplicate = detectDuplicateCandidate({ title, deadline }, allItems);
+    const executable = !titleTooLong && deadlineIssue === null && status !== null && isStatusAllowed(kind, status);
+    const selected = executable && duplicate === null;
+    normalized.push({
+      rowId: `c${index}`,
+      title,
+      kind,
+      status,
+      description,
+      workType,
+      deadline,
+      deadlineIssue,
+      titleTooLong,
+      statusInvalid,
+      statusAdjusted: false,
+      expired,
+      duplicate,
+      selected,
+      executable
+    });
+  });
+  if (normalized.length === 0 && ignored.length === 0) {
+    return { ok: true, intent: 'clarify', message: AI_CREATE_EMPTY_MESSAGE, omittedCount };
+  }
+  return {
+    ok: true,
+    intent: 'create',
+    message: typeof payload?.message === 'string' ? payload.message : '',
+    omittedCount,
+    create: { candidates: normalized, ignored }
+  };
+}
+
+function normalizeUpdatePlan(options) {
+  const { payload, summaryItems, allItems, omittedCount } = options;
+  if (!isPlainObject(payload?.update)) {
+    return { ok: true, intent: 'clarify', message: AI_UPDATE_NO_MATCH_MESSAGE, omittedCount };
+  }
+  const targetIds = parseTargetIds(payload.update.targetIds);
+  if (targetIds.length === 0) {
+    return { ok: true, intent: 'clarify', message: AI_UPDATE_NO_MATCH_MESSAGE, omittedCount };
+  }
+  const { missingIds, outOfRangeIds, resolvedIds } = classifyTargetIds(targetIds, allItems, summaryItems);
+  if (resolvedIds.length === 0) {
+    return {
+      ok: true,
+      intent: 'clarify',
+      message: composePlanMessage(AI_UPDATE_NO_MATCH_MESSAGE, buildPlanNotes(missingIds, outOfRangeIds)),
+      omittedCount
+    };
+  }
+  const orderedIds = collectPlanTargetIds(resolvedIds, allItems);
+  const targets = orderedIds.map(id => {
+    const row = allItems.find(item => item.id === id);
+    return {
+      id: row.id,
+      title: row.title,
+      kind: row.kind,
+      deadline: row.deadline,
+      status: row.status,
+      isAmbiguous: isAmbiguousTitle(row.title, allItems)
+    };
+  });
+  const ambiguous = targets.length > 1 || targets.some(target => target.isAmbiguous);
+  const applyToId = targets.length === 1 ? targets[0].id : null;
+
+  const sourceChanges = isPlainObject(payload.update.changes) ? payload.update.changes : {};
+  const explicitKinds = resolvedIds.map(id => (allItems.find(item => item.id === id) || {}).kind);
+  if (typeof sourceChanges.kind === 'string' && !explicitKinds.every(kind => kind === sourceChanges.kind)) {
+    return { ok: true, intent: 'clarify', message: AI_UPDATE_KIND_MESSAGE, omittedCount };
+  }
+
+  const changes = {};
+  let statusInvalid = false;
+  let deadlineInvalid = false;
+  let titleTooLong = false;
+
+  const hasDeadline = !(sourceChanges.deadline === null || sourceChanges.deadline === undefined
+    || (typeof sourceChanges.deadline === 'string' && sourceChanges.deadline.trim() === ''));
+  if (hasDeadline) {
+    if (typeof sourceChanges.deadline === 'string') {
+      try {
+        changes.deadline = validateDeadline(sourceChanges.deadline.trim());
+      } catch {
+        changes.deadline = null;
+        deadlineInvalid = true;
+      }
+    } else {
+      changes.deadline = null;
+      deadlineInvalid = true;
+    }
+  }
+
+  const hasStatus = !(sourceChanges.status === null || sourceChanges.status === undefined
+    || (typeof sourceChanges.status === 'string' && sourceChanges.status.trim() === ''));
+  if (hasStatus) {
+    const status = typeof sourceChanges.status === 'string' ? sourceChanges.status.trim() : null;
+    if (status !== null && explicitKinds.every(kind => isStatusAllowed(kind, status))) {
+      changes.status = status;
+    } else {
+      changes.status = null;
+      statusInvalid = true;
+    }
+  }
+
+  if (typeof sourceChanges.title === 'string') {
+    const title = sourceChanges.title.trim();
+    if (title !== '') {
+      titleTooLong = title.length > 120;
+      changes.title = title;
+    }
+  }
+
+  if (typeof sourceChanges.description === 'string') {
+    changes.description = sourceChanges.description.trim().slice(0, 10000);
+  }
+
+  if (sourceChanges.workType === 'personal' || sourceChanges.workType === 'team') {
+    changes.workType = sourceChanges.workType;
+  }
+
+  if (Object.keys(changes).length === 0 && !statusInvalid && !deadlineInvalid) {
+    return { ok: true, intent: 'clarify', message: AI_UPDATE_NO_CHANGES_MESSAGE, omittedCount };
+  }
+
+  const message = composePlanMessage(payload.message, buildPlanNotes(missingIds, outOfRangeIds));
+  return {
+    ok: true,
+    intent: 'update',
+    message,
+    omittedCount,
+    update: {
+      targets,
+      ambiguous,
+      applyToId,
+      changes,
+      statusInvalid,
+      deadlineInvalid,
+      titleTooLong,
+      message
+    }
+  };
+}
+
+function normalizeDeletePlan(options) {
+  const { payload, summaryItems, allItems, omittedCount } = options;
+  if (!isPlainObject(payload?.delete)) {
+    return { ok: true, intent: 'clarify', message: AI_DELETE_NO_MATCH_MESSAGE, omittedCount };
+  }
+  const targetIds = parseTargetIds(payload.delete.targetIds);
+  if (targetIds.length === 0) {
+    return { ok: true, intent: 'clarify', message: AI_DELETE_NO_MATCH_MESSAGE, omittedCount };
+  }
+  const { missingIds, outOfRangeIds, resolvedIds } = classifyTargetIds(targetIds, allItems, summaryItems);
+  if (resolvedIds.length === 0) {
+    return {
+      ok: true,
+      intent: 'clarify',
+      message: composePlanMessage(AI_DELETE_NO_MATCH_MESSAGE, buildPlanNotes(missingIds, outOfRangeIds)),
+      omittedCount
+    };
+  }
+  const orderedIds = collectPlanTargetIds(resolvedIds, allItems);
+  const targets = orderedIds.map(id => {
+    const row = allItems.find(item => item.id === id);
+    const isAmbiguous = isAmbiguousTitle(row.title, allItems);
+    return {
+      id: row.id,
+      title: row.title,
+      kind: row.kind,
+      deadline: row.deadline,
+      status: row.status,
+      selected: !isAmbiguous,
+      isAmbiguous
+    };
+  });
+  return {
+    ok: true,
+    intent: 'delete',
+    message: composePlanMessage(payload.message, buildPlanNotes(missingIds, outOfRangeIds)),
+    omittedCount,
+    delete: { targets }
+  };
+}
+
+function normalizeCleanupPlan(options) {
+  const { payload, allItems, now, omittedCount } = options;
+  const range = resolveRange(payload?.cleanup?.range, now, { allowAll: true });
+  if (!range) {
+    return { ok: true, intent: 'clarify', message: AI_CLEANUP_NO_RANGE_MESSAGE, omittedCount };
+  }
+  const targets = (Array.isArray(allItems) ? allItems : [])
+    .filter(item => item.status === 'completed'
+      && ['assignment', 'activity'].includes(item.kind)
+      && String(item.deadline).slice(0, 10) >= range.start
+      && String(item.deadline).slice(0, 10) <= range.end)
+    .sort((a, b) => a.deadline.localeCompare(b.deadline) || a.id - b.id)
+    .map(item => ({ id: item.id, title: item.title, kind: item.kind, deadline: item.deadline, status: item.status, selected: true }));
+  return {
+    ok: true,
+    intent: 'cleanup',
+    message: targets.length === 0
+      ? AI_CLEANUP_EMPTY_MESSAGE
+      : (typeof payload.message === 'string' ? payload.message : ''),
+    omittedCount,
+    cleanup: { targets, rangeLabel: range.label }
+  };
+}
+
 function buildAssistantSystemPrompt() {
   return [
     '你是「截止线」的事项助手，只做意图识别与结构化输出：不写库、不解释推理过程。',
@@ -1282,13 +1732,17 @@ function buildResolvedRange(startDate, endDate, withWeekday) {
   };
 }
 
-function resolveRange(range, baseDate) {
+function resolveRange(range, baseDate, options = {}) {
   if (!range || typeof range !== 'object' || Array.isArray(range) || typeof range.type !== 'string') return null;
   const base = baseDate instanceof Date && !Number.isNaN(baseDate.getTime()) ? baseDate : new Date();
   const monday = weekStart(base);
   const year = base.getFullYear();
   const monthIndex = base.getMonth();
   switch (range.type) {
+    case 'all':
+      return options?.allowAll === true
+        ? { start: '0000-01-01', end: '9999-12-31', label: '全部时间' }
+        : null;
     case 'this_week':
       return buildResolvedRange(monday, addDays(monday, 6), true);
     case 'next_week':
@@ -1452,7 +1906,8 @@ function registerAssistantHandlers() {
       if (!text) return invalidInput(AI_ERROR_TABLE.invalid_input.message);
       if (text.length > AI_INPUT_MAX_LENGTH) return invalidInput(`内容超过 ${AI_INPUT_MAX_LENGTH} 字符，请精简后再提交`);
       const now = new Date();
-      const summary = buildAssistantSummary(now);
+      const allItems = readItemsForAssistant();
+      const summary = buildAssistantSummary(now, allItems);
       const chat = await callChatCompletion({
         endpoint: config.endpoint,
         apiKey: config.apiKey,
@@ -1464,10 +1919,21 @@ function registerAssistantHandlers() {
         timeoutMs: resolveAiTimeoutMs()
       });
       const payload = readAssistantPayload(chat);
+      const planOptions = {
+        payload,
+        summaryItems: summary.items,
+        allItems,
+        now,
+        omittedCount: summary.omittedCount
+      };
       const normalized = normalizeAssistantIntent(payload);
       if (normalized.intent === 'query') {
         return await handleAssistantQuery({ payload, config, now, input: text, omittedCount: summary.omittedCount });
       }
+      if (normalized.intent === 'create') return normalizeCreatePlan(planOptions);
+      if (normalized.intent === 'update') return normalizeUpdatePlan(planOptions);
+      if (normalized.intent === 'delete') return normalizeDeletePlan(planOptions);
+      if (normalized.intent === 'cleanup') return normalizeCleanupPlan(planOptions);
       return { ok: true, intent: normalized.intent, message: normalized.message, omittedCount: summary.omittedCount };
     } catch (error) {
       if (error instanceof AssistantFailure) {

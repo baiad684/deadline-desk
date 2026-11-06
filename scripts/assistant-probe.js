@@ -23,7 +23,7 @@ const CHECK_TITLES = {
   7: '输入类型与长度校验',
   8: '模型请求报文契约',
   9: '事项摘要排序、截取与 omittedCount',
-  10: '围栏与数组内容解析',
+  10: '围栏与数组内容解析（无 create 块归一为 clarify）',
   11: '多意图归一化为 clarify',
   12: '未知意图归一化为 clarify',
   13: '越界意图 unsupported',
@@ -37,7 +37,13 @@ const CHECK_TITLES = {
   21: '助手通道不改动事项数据',
   22: '非主窗口调用被拒绝',
   23: '重启后 Key 掩码与配置保持',
-  24: '全流程无页面异常'
+  24: '全流程无页面异常',
+  25: '写意图：新增计划字段与默认勾选',
+  26: '写意图：修改计划与非法字段',
+  27: '写意图：删除计划与同名歧义',
+  28: '写意图：清理范围过滤与空结果',
+  29: '写意图：计划阶段零写入',
+  30: '错误映射：400/404/418'
 };
 
 const passed = new Set();
@@ -161,6 +167,53 @@ function createMockServer() {
           return sendJson(res, 200, chatCompletion('{"intent":"query","query":{"range":{"type":"last_month"},"status":"completed"}}'));
         case 'MOCK_QUERY_NO_RANGE':
           return sendJson(res, 200, chatCompletion('{"intent":"query","query":{}}'));
+        case 'MOCK_PLAN_CREATE':
+          return sendJson(res, 200, chatCompletion(JSON.stringify({
+            intent: 'create',
+            message: '已整理出候选',
+            create: {
+              candidates: [
+                { title: '数据库课设', kind: 'assignment', deadline: `${localDate(3)} 23:59`, status: 'not_started', workType: 'team' },
+                { title: '校园歌手比赛', kind: 'activity', deadline: `${localDate(2)} 20:00`, status: 'not_completed', workType: null },
+                { title: '补录旧作业', kind: 'assignment', deadline: `${localDate(-3)} 02:00`, status: 'not_started', workType: 'personal' },
+                { title: '缺少时间的作业', kind: 'assignment', deadline: null, workType: null },
+                { title: '随手记一下', kind: 'diary', deadline: null }
+              ],
+              ignored: [{ text: '随手一提', reason: '没有明确标题' }]
+            }
+          })));
+        case 'MOCK_PLAN_UPDATE':
+          return sendJson(res, 200, chatCompletion(JSON.stringify({
+            intent: 'update',
+            message: '已找到目标',
+            update: {
+              targetIds: [1],
+              changes: {
+                kind: 'assignment',
+                deadline: `${localDate(6)} 23:59`,
+                status: 'in_progress',
+                title: '数据库课程设计（改）',
+                description: '新说明'
+              }
+            }
+          })));
+        case 'MOCK_PLAN_UPDATE_INVALID':
+          return sendJson(res, 200, chatCompletion(JSON.stringify({
+            intent: 'update',
+            update: { targetIds: [2], changes: { status: 'in_progress', deadline: '2026-02-31 10:00' } }
+          })));
+        case 'MOCK_PLAN_DELETE':
+          return sendJson(res, 200, chatCompletion(JSON.stringify({ intent: 'delete', delete: { targetIds: [3, 2] } })));
+        case 'MOCK_PLAN_CLEANUP':
+          return sendJson(res, 200, chatCompletion(JSON.stringify({ intent: 'cleanup', cleanup: { range: { type: 'last_month' } } })));
+        case 'MOCK_PLAN_CLEANUP_EMPTY':
+          return sendJson(res, 200, chatCompletion(JSON.stringify({ intent: 'cleanup', cleanup: { range: { type: 'next_month' } } })));
+        case 'MOCK_400':
+          return sendJson(res, 400, { error: { message: 'secret-body' } });
+        case 'MOCK_404':
+          return sendJson(res, 404, { error: { message: 'secret-body' } });
+        case 'MOCK_418':
+          return sendJson(res, 418, { error: { message: 'secret-body' } });
         default:
           return sendJson(res, 200, chatCompletion('{"intent":"clarify","message":"请补充更多信息"}'));
       }
@@ -226,6 +279,10 @@ function parse(page, input) {
 
 function snapshotItems(page) {
   return page.evaluate(() => JSON.stringify(window.deadlineDesk.items.list()));
+}
+
+function snapshotSettings(page) {
+  return page.evaluate(() => JSON.stringify(window.deadlineDesk.settings.get()));
 }
 
 async function openStagePage(electronApp, pageErrors) {
@@ -304,8 +361,11 @@ async function runStageA(electronApp, mock, pageErrors) {
   await mock.resetMock();
   for (const key of ['MOCK_FENCE', 'MOCK_ARRAY']) {
     const result = await parse(page, key);
-    assert(result.ok === true && result.intent === 'create', `${key} 应解析为 create`);
-    assert(!('create' in result) && !('query' in result), '非查询成功结构不应包含计划字段');
+    assert(result.ok === true && result.intent === 'clarify', `${key} 无 create 块应归一为 clarify，实际 ${JSON.stringify(result)}`);
+    assert(result.message === '没有识别到可新增的事项。', `${key} 空计划文案不正确：${result.message}`);
+    for (const field of ['create', 'update', 'delete', 'cleanup', 'query']) {
+      assert(!(field in result), `${key} clarify 结果不应包含计划字段 ${field}`);
+    }
     assert(result.omittedCount === 0, '空数据时 omittedCount 应为 0');
   }
   passCheck(10);
@@ -522,6 +582,144 @@ async function runStageD(electronApp, mock, pageErrors) {
   passCheck(21);
 }
 
+async function runStageE(electronApp, mock, pageErrors) {
+  const page = await openStagePage(electronApp, pageErrors);
+  const now = new Date();
+
+  const ai = await readAi(page);
+  assert(ai.configured === true, `阶段 E 前应已恢复配置，实际 ${JSON.stringify(ai)}`);
+  assert(ai.keyMask === expectedKeyMask, `阶段 E Key 掩码应为 ${expectedKeyMask}，实际 ${ai.keyMask}`);
+
+  const itemsBefore = await snapshotItems(page);
+  const settingsBefore = await snapshotSettings(page);
+
+  const create = await parse(page, 'MOCK_PLAN_CREATE');
+  assert(create.ok === true && create.intent === 'create', `新增计划应返回 create，实际 ${JSON.stringify(create)}`);
+  assert(create.message === '已整理出候选', `新增计划说明不正确：${create.message}`);
+  assert(create.omittedCount === 0, `新增计划 omittedCount 不正确：${create.omittedCount}`);
+  assert(create.create.candidates.length === 4, `候选数量应为 4，实际 ${create.create.candidates.length}`);
+  assert(
+    create.create.candidates.map(item => item.rowId).join(',') === 'c0,c1,c2,c3',
+    `rowId 顺序不正确：${create.create.candidates.map(item => item.rowId).join(',')}`
+  );
+  const [c0, c1, c2, c3] = create.create.candidates;
+  assert(c0.duplicate !== null && c0.duplicate.id === 1, `c0 应命中样本 id 1，实际 ${JSON.stringify(c0.duplicate)}`);
+  assert(c0.duplicate.title === '数据库课程设计', `c0 命中标题不正确：${c0.duplicate.title}`);
+  assert(c0.duplicate.deadline === `${localDate(3)} 23:59`, `c0 命中截止时间不正确：${c0.duplicate.deadline}`);
+  assert(c0.selected === false && c0.executable === true && c0.workType === 'team', `c0 勾选/可执行/协作类型不正确：${JSON.stringify(c0)}`);
+  assert(c1.selected === true && c1.duplicate === null, `c1 默认勾选或重复判定不正确：${JSON.stringify(c1)}`);
+  assert(
+    c1.workType === null && c1.deadline === `${localDate(2)} 20:00` && c1.status === 'not_completed' && c1.executable === true,
+    `c1 字段不正确：${JSON.stringify(c1)}`
+  );
+  assert(c2.expired === true && c2.selected === true && c2.duplicate === null && c2.executable === true, `c2 过期用例不正确：${JSON.stringify(c2)}`);
+  assert(
+    c3.deadlineIssue === 'missing' && c3.deadline === null && c3.executable === false && c3.selected === false && c3.status === 'not_started',
+    `c3 缺时间用例不正确：${JSON.stringify(c3)}`
+  );
+  assert(create.create.ignored.length === 2, `ignored 数量应为 2，实际 ${create.create.ignored.length}`);
+  assert(
+    create.create.ignored[0].text === '随手一提' && create.create.ignored[0].reason === '没有明确标题',
+    `ignored[0] 不正确：${JSON.stringify(create.create.ignored[0])}`
+  );
+  assert(
+    create.create.ignored[1].text === '随手记一下' && create.create.ignored[1].reason === '事项类型无效',
+    `ignored[1] 不正确：${JSON.stringify(create.create.ignored[1])}`
+  );
+  passCheck(25);
+
+  const update = await parse(page, 'MOCK_PLAN_UPDATE');
+  assert(update.ok === true && update.intent === 'update', `修改计划应返回 update，实际 ${JSON.stringify(update)}`);
+  assert(
+    update.update.targets.length === 1 && update.update.applyToId === 1 && update.update.ambiguous === false,
+    `修改计划目标解析不正确：${JSON.stringify(update.update)}`
+  );
+  assert(update.update.changes.deadline === `${localDate(6)} 23:59`, `修改计划截止时间不正确：${update.update.changes.deadline}`);
+  assert(
+    update.update.changes.status === 'in_progress'
+    && update.update.changes.description === '新说明'
+    && update.update.changes.title === '数据库课程设计（改）',
+    `修改计划字段不正确：${JSON.stringify(update.update.changes)}`
+  );
+  assert(
+    update.update.statusInvalid === false && update.update.deadlineInvalid === false,
+    `修改计划不应有非法标记：${JSON.stringify(update.update)}`
+  );
+  assert(update.message.includes('已找到目标'), `修改计划说明不正确：${update.message}`);
+  assert(update.update.message === update.message, '修改计划的 update.message 应与顶层 message 相同');
+
+  const invalidUpdate = await parse(page, 'MOCK_PLAN_UPDATE_INVALID');
+  assert(invalidUpdate.ok === true && invalidUpdate.intent === 'update', `非法字段修改应仍返回 update，实际 ${JSON.stringify(invalidUpdate)}`);
+  assert(
+    invalidUpdate.update.targets.length === 1 && invalidUpdate.update.targets[0].id === 2 && invalidUpdate.update.applyToId === 2,
+    `非法字段修改目标不正确：${JSON.stringify(invalidUpdate.update)}`
+  );
+  assert(
+    invalidUpdate.update.deadlineInvalid === true && invalidUpdate.update.changes.deadline === null,
+    `非法截止时间应标记 deadlineInvalid：${JSON.stringify(invalidUpdate.update)}`
+  );
+  assert(
+    invalidUpdate.update.statusInvalid === true
+    && Object.prototype.hasOwnProperty.call(invalidUpdate.update.changes, 'status') === true
+    && invalidUpdate.update.changes.status === null,
+    `非法状态应标记 statusInvalid：${JSON.stringify(invalidUpdate.update)}`
+  );
+  passCheck(26);
+
+  const remove = await parse(page, 'MOCK_PLAN_DELETE');
+  assert(remove.ok === true && remove.intent === 'delete', `删除计划应返回 delete，实际 ${JSON.stringify(remove)}`);
+  assert(
+    remove.delete.targets.map(target => target.id).join(',') === '3,2,4',
+    `删除计划目标顺序不正确：${remove.delete.targets.map(target => target.id).join(',')}`
+  );
+  const [target3, target2, target4] = remove.delete.targets;
+  assert(target3.isAmbiguous === true && target3.selected === false, `id 3 同名歧义判定不正确：${JSON.stringify(target3)}`);
+  assert(target4.isAmbiguous === true && target4.selected === false, `id 4 同名歧义判定不正确：${JSON.stringify(target4)}`);
+  assert(target2.selected === true, `id 2 唯一点名应默认勾选：${JSON.stringify(target2)}`);
+  passCheck(27);
+
+  const cleanup = await parse(page, 'MOCK_PLAN_CLEANUP');
+  assert(cleanup.ok === true && cleanup.intent === 'cleanup', `清理计划应返回 cleanup，实际 ${JSON.stringify(cleanup)}`);
+  assert(
+    cleanup.cleanup.targets.length === 1 && cleanup.cleanup.targets[0].id === 5 && cleanup.cleanup.targets[0].selected === true,
+    `上月清理目标不正确：${JSON.stringify(cleanup.cleanup)}`
+  );
+  assert(!cleanup.cleanup.targets.some(target => target.id === 6 || target.id === 7), '上月清理不应包含未完成或本月事项');
+  assert(cleanup.message === '', `无说明的清理计划 message 应为空，实际 ${cleanup.message}`);
+  const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+  const expectedLastMonthLabel = `${lastMonthStart.getFullYear()}年${lastMonthStart.getMonth() + 1}月1日–${lastMonthStart.getMonth() + 1}月${lastMonthEnd.getDate()}日`;
+  assert(cleanup.cleanup.rangeLabel === expectedLastMonthLabel, `上月范围标签不正确：${cleanup.cleanup.rangeLabel}`);
+
+  const emptyCleanup = await parse(page, 'MOCK_PLAN_CLEANUP_EMPTY');
+  assert(emptyCleanup.ok === true && emptyCleanup.intent === 'cleanup', `空结果清理应返回 cleanup，实际 ${JSON.stringify(emptyCleanup)}`);
+  assert(emptyCleanup.cleanup.targets.length === 0, `下月清理目标应为空，实际 ${JSON.stringify(emptyCleanup.cleanup.targets)}`);
+  assert(emptyCleanup.message === '没有符合条件的已完成事项。', `空结果文案不正确：${emptyCleanup.message}`);
+  const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const nextMonthEnd = new Date(now.getFullYear(), now.getMonth() + 2, 0);
+  const expectedNextMonthLabel = `${nextMonthStart.getFullYear()}年${nextMonthStart.getMonth() + 1}月1日–${nextMonthStart.getMonth() + 1}月${nextMonthEnd.getDate()}日`;
+  assert(emptyCleanup.cleanup.rangeLabel === expectedNextMonthLabel, `下月范围标签不正确：${emptyCleanup.cleanup.rangeLabel}`);
+  passCheck(28);
+
+  const itemsAfter = await snapshotItems(page);
+  const settingsAfter = await snapshotSettings(page);
+  assert(itemsAfter === itemsBefore, '阶段 E 写意图计划改动了事项数据');
+  assert(settingsAfter === settingsBefore, '阶段 E 写意图计划改动了设置数据');
+  passCheck(29);
+
+  for (const [key, code, retryable] of [
+    ['MOCK_400', 'http_400', false],
+    ['MOCK_404', 'http_404', false],
+    ['MOCK_418', 'http_other', true]
+  ]) {
+    const result = await parse(page, key);
+    assert(result.ok === false && result.code === code && result.retryable === retryable, `${key} 应映射为 ${code}（retryable=${retryable}），实际 ${JSON.stringify(result)}`);
+    const text = JSON.stringify(result);
+    assert(!text.includes(apiKey) && !text.includes(mockEndpoint) && !text.includes('secret-body'), `${key} 错误对象泄露了敏感信息`);
+  }
+  passCheck(30);
+}
+
 (async () => {
   fs.rmSync(dataDir, { recursive: true, force: true });
   fs.mkdirSync(outputDir, { recursive: true });
@@ -573,6 +771,26 @@ async function runStageD(electronApp, mock, pageErrors) {
     await stopApp(electronApp);
     electronApp = null;
 
+    const stageEStatements = [
+      { sql: 'DELETE FROM items' },
+      {
+        sql: "INSERT INTO settings (key, value) VALUES ('ai_api_key', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params: [apiKey]
+      },
+      { sql: 'INSERT INTO items (id, kind, title, description, deadline, status, work_type) VALUES (?, ?, ?, ?, ?, ?, ?)', params: [1, 'assignment', '数据库课程设计', '', `${localDate(3)} 23:59`, 'not_started', 'personal'] },
+      { sql: 'INSERT INTO items (id, kind, title, description, deadline, status, work_type) VALUES (?, ?, ?, ?, ?, ?, ?)', params: [2, 'activity', '校辩论赛报名', '', `${localDate(2)} 23:59`, 'not_completed', null] },
+      { sql: 'INSERT INTO items (id, kind, title, description, deadline, status, work_type) VALUES (?, ?, ?, ?, ?, ?, ?)', params: [3, 'activity', '同名活动', '', `${localDate(1)} 18:00`, 'not_completed', null] },
+      { sql: 'INSERT INTO items (id, kind, title, description, deadline, status, work_type) VALUES (?, ?, ?, ?, ?, ?, ?)', params: [4, 'assignment', '同名活动', '', `${localDate(5)} 23:59`, 'not_started', 'personal'] },
+      { sql: 'INSERT INTO items (id, kind, title, description, deadline, status, work_type) VALUES (?, ?, ?, ?, ?, ?, ?)', params: [5, 'assignment', '上月已完成作业', '', monthDate(-1, 10, '09:00'), 'completed', 'personal'] },
+      { sql: 'INSERT INTO items (id, kind, title, description, deadline, status, work_type) VALUES (?, ?, ?, ?, ?, ?, ?)', params: [6, 'assignment', '上月未完成作业', '', monthDate(-1, 20, '09:00'), 'not_started', 'personal'] },
+      { sql: 'INSERT INTO items (id, kind, title, description, deadline, status, work_type) VALUES (?, ?, ?, ?, ?, ?, ?)', params: [7, 'activity', '本月已完成活动', '', monthDate(0, 5, '10:00'), 'completed', null] }
+    ];
+    await mutateDb(stageEStatements);
+    electronApp = await launchApp();
+    await runStageE(electronApp, mock, pageErrors);
+    await stopApp(electronApp);
+    electronApp = null;
+
     assert(pageErrors.length === 0, `页面异常应为空，实际 ${JSON.stringify(pageErrors)}`);
     passCheck(24);
 
@@ -580,7 +798,7 @@ async function runStageD(electronApp, mock, pageErrors) {
       .filter(key => passed.has(key))
       .sort((a, b) => Number(a) - Number(b))
       .map(key => `${key}. ${CHECK_TITLES[key]}`);
-    assert(checks.length === 24, `断言数量应为 24，实际 ${checks.length}`);
+    assert(checks.length === 30, `断言数量应为 30，实际 ${checks.length}`);
     console.log(JSON.stringify({ passed: true, checks }));
   } finally {
     if (electronApp) await stopApp(electronApp);

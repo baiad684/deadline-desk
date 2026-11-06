@@ -124,6 +124,28 @@ function summaryItem(id, overrides = {}) {
   };
 }
 
+// detail_v2 写意图计划的输入行（与 readItemsForAssistant 返回列一致）
+function assistantRow(id, overrides = {}) {
+  return {
+    id,
+    title: `事项 ${id}`,
+    kind: 'assignment',
+    deadline: `${localDate(1)} 23:59`,
+    status: 'not_started',
+    ...overrides
+  };
+}
+
+function planOptions(payload, allItems, overrides = {}) {
+  return {
+    payload,
+    summaryItems: overrides.summaryItems === undefined ? allItems : overrides.summaryItems,
+    allItems,
+    now: overrides.now === undefined ? h.now() : overrides.now,
+    omittedCount: overrides.omittedCount === undefined ? 0 : overrides.omittedCount
+  };
+}
+
 // ---------- 内存版 database ----------
 
 function createFakeDatabase(seed = {}) {
@@ -1667,7 +1689,12 @@ describe('助手后端单元测试（detail_v1）', () => {
 
       const success = await h.parse('新建事项');
       assert.equal(success.ok, true);
-      assert.equal(success.intent, 'create');
+      assert.equal(success.intent, 'clarify');
+      assert.equal(success.message, '没有识别到可新增的事项。');
+      assert.equal(success.omittedCount, 0);
+      for (const field of ['create', 'update', 'delete', 'cleanup', 'query']) {
+        assert.equal(success[field], undefined);
+      }
     });
 
     test('F7.1 assistant:parse：来源校验先于配置与输入校验（无配置 + 非主窗口 + 非法输入仍为 forbidden）', async () => {
@@ -1752,12 +1779,12 @@ describe('助手后端单元测试（detail_v1）', () => {
 
     test('F7.1 assistant:parse：成功结果恰为 ok/intent/message/omittedCount，不含计划字段', async () => {
       h.setDatabase(configuredDatabase());
-      h.setFetch(() => Promise.resolve(chatEnvelope('{"intent":"create","message":"已识别到新增"}')));
+      h.setFetch(() => Promise.resolve(chatEnvelope('{"intent":"unsupported","message":"不支持这类操作。"}')));
       const result = await h.parse('新建事项');
       assert.deepEqual(plain(result), {
         ok: true,
-        intent: 'create',
-        message: '已识别到新增',
+        intent: 'unsupported',
+        message: '不支持这类操作。',
         omittedCount: 0
       });
       assert.deepEqual(Object.keys(result).sort(), ['intent', 'message', 'ok', 'omittedCount']);
@@ -1841,15 +1868,26 @@ describe('助手后端单元测试（detail_v1）', () => {
 
     test('F7.1 assistant:parse：围栏与数组 content 均可解析为 create', async () => {
       h.setDatabase(configuredDatabase());
-      h.setFetch(() => Promise.resolve(chatEnvelope('```json\n{"intent":"create","message":"ok"}\n```')));
+      const createContent = JSON.stringify({
+        intent: 'create',
+        message: 'ok',
+        create: {
+          candidates: [{ title: '围栏候选', kind: 'assignment', deadline: `${localDate(3)} 23:59`, status: 'not_started' }]
+        }
+      });
+      h.setFetch(() => Promise.resolve(chatEnvelope(`\`\`\`json\n${createContent}\n\`\`\``)));
       const fenced = await h.parse('新建事项');
       assert.equal(fenced.ok, true);
       assert.equal(fenced.intent, 'create');
+      assert.equal(fenced.create.candidates.length, 1);
+      assert.equal(fenced.create.candidates[0].rowId, 'c0');
 
-      h.setFetch(() => Promise.resolve(chatEnvelope([{ type: 'text', text: '{"intent":"create","message":"ok"}' }])));
+      h.setFetch(() => Promise.resolve(chatEnvelope([{ type: 'text', text: createContent }])));
       const arrayContent = await h.parse('新建事项');
       assert.equal(arrayContent.ok, true);
       assert.equal(arrayContent.intent, 'create');
+      assert.equal(arrayContent.create.candidates.length, 1);
+      assert.equal(arrayContent.create.candidates[0].rowId, 'c0');
     });
 
     test('F7.1 assistant:parse：多意图归一化为 clarify 且无计划字段', async () => {
@@ -2061,6 +2099,1028 @@ describe('助手后端单元测试（detail_v1）', () => {
       await h.parse('查本月完成情况');
       assert.equal(JSON.stringify(settingsSnapshot(db)), settingsBefore);
       assert.equal(h.itemsSnapshot(), itemsBefore);
+    });
+  });
+
+  // ============ F10–F16 写意图归一化（detail_v2） ============
+
+  describe('F10 公共工具', () => {
+    test('F10.4 normalizeAssistantTitle：NFKC、大小写与空白标点符号', () => {
+      const normalize = h.fn('normalizeAssistantTitle');
+      assert.equal(normalize(' 数据库 课程设计 '), '数据库');
+      assert.equal(normalize('ＤＢ课设'), 'db');
+      assert.equal(normalize('Data Base 课程设计'), 'database');
+    });
+
+    test('F10.4 normalizeAssistantTitle：只去掉一个前导词', () => {
+      const normalize = h.fn('normalizeAssistantTitle');
+      assert.equal(normalize('关于数据库'), '数据库');
+      assert.equal(normalize('报名比赛'), '');
+      assert.equal(normalize('参加活动'), '');
+      assert.equal(normalize('关于关于数据库'), '关于数据库');
+    });
+
+    test('F10.4 normalizeAssistantTitle：结尾词最长优先且只去一次', () => {
+      const normalize = h.fn('normalizeAssistantTitle');
+      assert.equal(normalize('关于课程设计报告'), '课程设计');
+      assert.equal(normalize('大作业'), '');
+      assert.equal(normalize('课程设计'), '');
+      assert.equal(normalize('数据库系统实验报告'), '数据库系统');
+    });
+
+    test('F10.4 normalizeAssistantTitle：归一化结果可为空串', () => {
+      const normalize = h.fn('normalizeAssistantTitle');
+      assert.equal(normalize('活动'), '');
+      assert.equal(normalize('报告'), '');
+      assert.equal(normalize('...'), '');
+      assert.equal(normalize('！！！'), '');
+    });
+
+    test('F10.5 buildTitleBigrams：连续二字组与长度边界', () => {
+      const bigrams = h.fn('buildTitleBigrams');
+      assert.deepEqual(plain(bigrams('abcd')), ['ab', 'bc', 'cd']);
+      assert.deepEqual(plain(bigrams('aaa')), ['aa', 'aa']);
+      assert.deepEqual(plain(bigrams('a')), []);
+      assert.deepEqual(plain(bigrams('')), []);
+      assert.deepEqual(plain(bigrams(123)), []);
+    });
+
+    test('F10.6 diceCoefficient：多重集交集与空集', () => {
+      const dice = h.fn('diceCoefficient');
+      assert.equal(dice(['ab', 'bc', 'cd'], ['ab', 'bc', 'cd']), 1);
+      assert.equal(dice(['ab'], ['cd']), 0);
+      assert.equal(dice(['aa', 'aa', 'ab'], ['aa']), 0.5);
+      assert.equal(dice([], []), 0);
+      assert.equal(dice(['ab', 'bc', 'cd', 'de'], ['ab', 'bc', 'cd', 'xx']), 0.75);
+      assert.equal(dice(
+        ['ab', 'bc', 'cd', 'de', 'ef', 'fg', 'gh', 'hi', 'ij'],
+        ['ab', 'bc', 'cd', 'de', 'ef', 'fg', 'gh', 'hx', 'xy', 'yz', 'zz']
+      ), 0.7);
+    });
+
+    test('F10.7 hasTitleSignal：相等与包含', () => {
+      const has = h.fn('hasTitleSignal');
+      assert.equal(has('数据库', '数据库'), true);
+      assert.equal(has('数据库', '数据库系统'), true);
+      assert.equal(has('数据库系统', '数据库'), true);
+    });
+
+    test('F10.7 hasTitleSignal：短串 <3、空串与 Dice 阈值', () => {
+      const has = h.fn('hasTitleSignal');
+      assert.equal(has('数据', '数据结构'), false);
+      assert.equal(has('', '课程'), false);
+      assert.equal(has('报告', '物理'), false);
+      assert.equal(has('abcde', 'abcdx'), true);
+      assert.equal(has('abcdefghij', 'abcdefghxyzz'), false);
+    });
+
+    test('F10.8 isDeadlineClose：窗口含边界与非法时间', () => {
+      const close = h.fn('isDeadlineClose');
+      const windowMs = 60 * 60 * 1000;
+      assert.equal(close('2026-11-20 10:00', '2026-11-20 11:00', windowMs), true);
+      assert.equal(close('2026-11-20 10:00', '2026-11-20 11:01', windowMs), false);
+      assert.equal(close('2026-11-20 10:00', 'bad', windowMs), false);
+      assert.equal(close(null, '2026-11-20 10:00', windowMs), false);
+    });
+
+    test('F10.1–F10.3 状态集合：按类型取默认与合法性', () => {
+      const statuses = h.fn('statusesForKind');
+      const fallback = h.fn('defaultStatusForKind');
+      const allowed = h.fn('isStatusAllowed');
+      assert.deepEqual(plain(statuses('assignment')), ['not_started', 'in_progress', 'completed']);
+      assert.deepEqual(plain(statuses('activity')), ['not_completed', 'completed']);
+      assert.deepEqual(plain(statuses('other')), []);
+      assert.deepEqual(plain(statuses(undefined)), []);
+      assert.equal(fallback('assignment'), 'not_started');
+      assert.equal(fallback('activity'), 'not_completed');
+      assert.equal(fallback('other'), null);
+      assert.equal(allowed('assignment', 'in_progress'), true);
+      assert.equal(allowed('activity', 'in_progress'), false);
+      assert.equal(allowed('assignment', ''), false);
+    });
+
+    test('F10.9 composePlanMessage：trim、丢弃空项与分号拼接', () => {
+      const compose = h.fn('composePlanMessage');
+      assert.equal(compose('已识别', ['未找到事项 id：9']), '已识别；未找到事项 id：9');
+      assert.equal(compose('  ', ['  ', null, 42, '', '注']), '注');
+      assert.equal(compose(123, []), '');
+      assert.equal(compose(undefined, ['甲', '乙']), '甲；乙');
+    });
+
+    test('F10.10 parseTargetIds：类型、正整数、去重与保序', () => {
+      const ids = h.fn('parseTargetIds');
+      assert.deepEqual(plain(ids([3, '2', 1])), [3, 2, 1]);
+      assert.deepEqual(plain(ids([1, 1, '1', '01'])), [1]);
+      assert.deepEqual(plain(ids([0, -1, 1.5, '', null, true, {}, [], 'abc', NaN, Infinity])), []);
+      assert.deepEqual(plain(ids('3')), []);
+      assert.deepEqual(plain(ids(null)), []);
+      assert.deepEqual(plain(ids([2, '02', 3])), [2, 3]);
+    });
+
+    test('F10.11 内部辅助：id 分类、note 文案、同名扩展与歧义判定', () => {
+      const classify = h.fn('classifyTargetIds');
+      const notes = h.fn('buildPlanNotes');
+      const collect = h.fn('collectPlanTargetIds');
+      const ambiguous = h.fn('isAmbiguousTitle');
+      const rows = [
+        assistantRow(1, { title: '数据库课程设计' }),
+        assistantRow(2, { title: '校辩论赛报名', kind: 'activity' }),
+        assistantRow(3, { title: '独立事项' }),
+        assistantRow(9, { title: '数据库课程设计' })
+      ];
+      const summary = rows.slice(0, 3);
+      assert.deepEqual(plain(classify([1, 2, 5, 9], rows, summary)), {
+        missingIds: [5],
+        outOfRangeIds: [9],
+        resolvedIds: [1, 2]
+      });
+      assert.deepEqual(plain(notes([5], [9])), ['未找到事项 id：5', '超出本次可操作范围的事项 id：9']);
+      assert.deepEqual(plain(notes([], [])), []);
+      assert.deepEqual(plain(collect([1], rows)), [1, 9]);
+      assert.deepEqual(plain(collect([2], rows)), [2]);
+      assert.equal(ambiguous('数据库课程设计', rows), true);
+      assert.equal(ambiguous('独立事项', rows), false);
+    });
+  });
+
+  describe('F11 疑似重复检测', () => {
+    test('F11.1 标题信号优先于仅时间信号', () => {
+      const detect = h.fn('detectDuplicateCandidate');
+      const candidate = { title: '数据库', deadline: '2026-11-20 10:00' };
+      const items = [
+        { id: 1, title: '数据库课程设计', kind: 'assignment', deadline: '2026-11-20 12:00', status: 'not_started' },
+        { id: 2, title: '无关事项', kind: 'activity', deadline: '2026-11-20 10:00', status: 'completed' }
+      ];
+      assert.equal(detect(candidate, items).id, 1);
+    });
+
+    test('F11.1 多个标题命中取时间差绝对值最小', () => {
+      const detect = h.fn('detectDuplicateCandidate');
+      const candidate = { title: '数据库', deadline: '2026-11-20 10:00' };
+      const items = [
+        { id: 1, title: '数据库', kind: 'assignment', deadline: '2026-11-20 11:00', status: 'not_started' },
+        { id: 2, title: '数据库', kind: 'assignment', deadline: '2026-11-20 10:30', status: 'completed' }
+      ];
+      assert.equal(detect(candidate, items).id, 2);
+    });
+
+    test('F11.1 时间差并列取 id 升序', () => {
+      const detect = h.fn('detectDuplicateCandidate');
+      const candidate = { title: '', deadline: '2026-11-20 10:00' };
+      const items = [
+        { id: 3, title: '完全无关的甲', kind: 'assignment', deadline: '2026-11-20 10:00', status: 'not_started' },
+        { id: 1, title: '完全无关的乙', kind: 'activity', deadline: '2026-11-20 10:00', status: 'not_completed' }
+      ];
+      assert.equal(detect(candidate, items).id, 1);
+    });
+
+    test('F11.1 候选无截止时间只走标题信号', () => {
+      const detect = h.fn('detectDuplicateCandidate');
+      const unrelated = [{ id: 1, title: '无关', kind: 'assignment', deadline: '2026-11-20 10:00', status: 'not_started' }];
+      assert.equal(detect({ title: '数据库', deadline: null }, unrelated), null);
+      const same = [{ id: 2, title: '数据库课设', kind: 'activity', deadline: '2026-11-20 10:00', status: 'completed' }];
+      assert.equal(detect({ title: '数据库', deadline: null }, same).id, 2);
+    });
+
+    test('F11.1 跨类型、已完成、逾期事项均参与检测', () => {
+      const detect = h.fn('detectDuplicateCandidate');
+      const items = [
+        { id: 7, title: '数据库课程设计', kind: 'activity', deadline: '2020-01-01 00:00', status: 'completed' }
+      ];
+      const result = detect({ title: '数据库', deadline: null }, items);
+      assert.equal(result.id, 7);
+      assert.equal(result.title, '数据库课程设计');
+    });
+
+    test('F11.1 无命中返回 null，命中仅返回 id/title/deadline', () => {
+      const detect = h.fn('detectDuplicateCandidate');
+      assert.equal(detect({ title: '不存在的标题', deadline: null }, [
+        { id: 1, title: '别的', kind: 'assignment', deadline: '2026-11-20 10:00', status: 'not_started' }
+      ]), null);
+      const hit = detect({ title: '数据库', deadline: '2026-11-20 10:00' }, [
+        { id: 1, title: '数据库课程设计', kind: 'assignment', deadline: '2026-11-20 10:00', status: 'not_started' }
+      ]);
+      assert.deepEqual(plain(hit), { id: 1, title: '数据库课程设计', deadline: '2026-11-20 10:00' });
+      assert.deepEqual(Object.keys(hit).sort(), ['deadline', 'id', 'title']);
+    });
+  });
+
+  describe('F12 新增计划 normalizeCreatePlan', () => {
+    const createPlan = (payload, allItems = []) => h.fn('normalizeCreatePlan')(planOptions(payload, allItems));
+
+    test('F12 截止时间：date-only 补 23:59，完整时间原样保留', () => {
+      const dateOnly = createPlan({ create: { candidates: [{ title: '新作业', kind: 'assignment', deadline: localDate(5), status: 'not_started' }] } });
+      assert.equal(dateOnly.intent, 'create');
+      assert.equal(dateOnly.create.candidates[0].deadline, `${localDate(5)} 23:59`);
+      const full = createPlan({ create: { candidates: [{ title: '新作业', kind: 'assignment', deadline: `${localDate(6)} 10:30`, status: 'not_started' }] } });
+      assert.equal(full.create.candidates[0].deadline, `${localDate(6)} 10:30`);
+    });
+
+    test('F12 说明：trim、10000 截断与非字符串回落空串', () => {
+      const trimmed = createPlan({ create: { candidates: [{ title: '说明', kind: 'assignment', deadline: `${localDate(5)} 23:59`, description: '  x  ' }] } });
+      assert.equal(trimmed.create.candidates[0].description, 'x');
+      const long = createPlan({ create: { candidates: [{ title: '长说明', kind: 'assignment', deadline: `${localDate(5)} 23:59`, description: 'y'.repeat(10001) }] } });
+      assert.equal(long.create.candidates[0].description.length, 10000);
+      const nonString = createPlan({ create: { candidates: [{ title: '空说明', kind: 'assignment', deadline: `${localDate(5)} 23:59`, description: null }] } });
+      assert.equal(nonString.create.candidates[0].description, '');
+    });
+
+    test('F12 workType：大作业仅 team 保留，活动恒为 null', () => {
+      const candidates = [
+        { title: '团队作业', kind: 'assignment', deadline: `${localDate(5)} 23:59`, workType: 'team' },
+        { title: '个人作业', kind: 'assignment', deadline: `${localDate(5)} 23:59`, workType: 'other' },
+        { title: '活动一项', kind: 'activity', deadline: `${localDate(5)} 23:59`, workType: 'team' }
+      ];
+      const result = createPlan({ create: { candidates } });
+      assert.equal(result.create.candidates[0].workType, 'team');
+      assert.equal(result.create.candidates[1].workType, 'personal');
+      assert.equal(result.create.candidates[2].workType, null);
+    });
+
+    test('F12 deadlineIssue：缺失 / 非法 / 合法', () => {
+      const missing = createPlan({ create: { candidates: [{ title: '缺时间', kind: 'assignment' }] } });
+      assert.deepEqual(plain(missing.create.candidates[0].deadlineIssue), 'missing');
+      assert.equal(missing.create.candidates[0].deadline, null);
+      assert.equal(missing.create.candidates[0].executable, false);
+      const blank = createPlan({ create: { candidates: [{ title: '空白时间', kind: 'assignment', deadline: '   ' }] } });
+      assert.equal(blank.create.candidates[0].deadlineIssue, 'missing');
+      for (const deadline of ['2026-02-31', 123, {}]) {
+        const invalid = createPlan({ create: { candidates: [{ title: '非法时间', kind: 'assignment', deadline }] } });
+        assert.equal(invalid.create.candidates[0].deadlineIssue, 'invalid', `${JSON.stringify(deadline)} 应判为非法`);
+        assert.equal(invalid.create.candidates[0].deadline, null);
+      }
+      const valid = createPlan({ create: { candidates: [{ title: '合法时间', kind: 'assignment', deadline: `${localDate(5)} 23:59` }] } });
+      assert.equal(valid.create.candidates[0].deadlineIssue, null);
+      assert.equal(valid.create.candidates[0].executable, true);
+    });
+
+    test('F12 status：缺失取默认、合法保留、非法标记且置 null', () => {
+      const missing = createPlan({ create: { candidates: [
+        { title: '大作业缺状态', kind: 'assignment', deadline: `${localDate(5)} 23:59` },
+        { title: '活动缺状态', kind: 'activity', deadline: `${localDate(5)} 23:59` }
+      ] } });
+      assert.equal(missing.create.candidates[0].status, 'not_started');
+      assert.equal(missing.create.candidates[1].status, 'not_completed');
+      const kept = createPlan({ create: { candidates: [{ title: '已完成作业', kind: 'assignment', deadline: `${localDate(5)} 23:59`, status: 'completed' }] } });
+      assert.equal(kept.create.candidates[0].status, 'completed');
+      assert.equal(kept.create.candidates[0].statusInvalid, false);
+      const invalid = createPlan({ create: { candidates: [{ title: '错状态作业', kind: 'assignment', deadline: `${localDate(5)} 23:59`, status: 'not_completed' }] } });
+      assert.equal(invalid.create.candidates[0].statusInvalid, true);
+      assert.equal(invalid.create.candidates[0].status, null);
+      assert.equal(invalid.create.candidates[0].executable, false);
+    });
+
+    test('F12 标题长度：120 可执行、121 保留但不可执行', () => {
+      const allowed = createPlan({ create: { candidates: [{ title: '标'.repeat(120), kind: 'assignment', deadline: `${localDate(5)} 23:59`, status: 'not_started' }] } });
+      assert.equal(allowed.create.candidates[0].titleTooLong, false);
+      assert.equal(allowed.create.candidates[0].executable, true);
+      const tooLong = createPlan({ create: { candidates: [{ title: '标'.repeat(121), kind: 'assignment', deadline: `${localDate(5)} 23:59`, status: 'not_started' }] } });
+      assert.equal(tooLong.create.candidates[0].titleTooLong, true);
+      assert.equal(tooLong.create.candidates[0].executable, false);
+      assert.equal(tooLong.create.candidates[0].selected, false);
+    });
+
+    test('F12 标题为空或非字符串时记入 ignored', () => {
+      const result = createPlan({ create: { candidates: [
+        { title: '   ', kind: 'assignment' },
+        { title: 42, kind: 'activity' }
+      ] } });
+      assert.equal(result.intent, 'create');
+      assert.equal(result.create.candidates.length, 0);
+      assert.deepEqual(plain(result.create.ignored), [
+        { text: '', reason: '缺少明确标题' },
+        { text: '', reason: '缺少明确标题' }
+      ]);
+    });
+
+    test('F12 kind 非法与非对象候选：候选格式无效', () => {
+      const result = createPlan({ create: { candidates: [
+        { title: ' 随手记 ', kind: 'diary' },
+        null,
+        [],
+        'x'
+      ] } });
+      assert.equal(result.create.candidates.length, 0);
+      assert.deepEqual(plain(result.create.ignored), [
+        { text: '随手记', reason: '事项类型无效' },
+        { text: '', reason: '候选格式无效' },
+        { text: '', reason: '候选格式无效' },
+        { text: '', reason: '候选格式无效' }
+      ]);
+    });
+
+    test('F12 ignored 合并：模型项在前并过滤非法项，本地项在后', () => {
+      const result = createPlan({
+        create: {
+          candidates: [{ title: '', kind: 'assignment' }],
+          ignored: [
+            { text: ' 随手一提 ', reason: ' 没有明确标题 ' },
+            { text: '无效', reason: '   ' },
+            'x',
+            { text: '无原因' }
+          ]
+        }
+      });
+      assert.deepEqual(plain(result.create.ignored), [
+        { text: '随手一提', reason: '没有明确标题' },
+        { text: '', reason: '缺少明确标题' }
+      ]);
+    });
+
+    test('F12 expired：过去为 true 且不影响默认勾选', () => {
+      const past = createPlan({ create: { candidates: [{ title: '旧作业', kind: 'assignment', deadline: `${localDate(-3)} 02:00`, status: 'not_started' }] } });
+      assert.equal(past.create.candidates[0].expired, true);
+      assert.equal(past.create.candidates[0].selected, true);
+      const future = createPlan({ create: { candidates: [{ title: '新作业', kind: 'assignment', deadline: `${localDate(5)} 23:59`, status: 'not_started' }] } });
+      assert.equal(future.create.candidates[0].expired, false);
+      const missing = createPlan({ create: { candidates: [{ title: '缺时间', kind: 'assignment' }] } });
+      assert.equal(missing.create.candidates[0].expired, false);
+    });
+
+    test('F12 疑似重复：命中则默认不勾选，未命中可勾选', () => {
+      const allItems = [assistantRow(1, { title: '数据库课程设计', deadline: `${localDate(5)} 23:59` })];
+      const hit = createPlan({ create: { candidates: [{ title: '数据库课设', kind: 'assignment', deadline: `${localDate(5)} 23:59`, status: 'not_started' }] } }, allItems);
+      assert.deepEqual(plain(hit.create.candidates[0].duplicate), {
+        id: 1,
+        title: '数据库课程设计',
+        deadline: `${localDate(5)} 23:59`
+      });
+      assert.equal(hit.create.candidates[0].selected, false);
+      const miss = createPlan({ create: { candidates: [{ title: '全新事项', kind: 'assignment', deadline: `${localDate(9)} 23:59`, status: 'not_started' }] } }, allItems);
+      assert.equal(miss.create.candidates[0].duplicate, null);
+      assert.equal(miss.create.candidates[0].selected, true);
+    });
+
+    test('F12 rowId：按模型原始下标，丢弃候选项留空号', () => {
+      const result = createPlan({ create: { candidates: [
+        { title: '有效甲', kind: 'assignment', deadline: `${localDate(5)} 23:59`, status: 'not_started' },
+        null,
+        { title: '有效乙', kind: 'assignment', deadline: `${localDate(5)} 23:59`, status: 'not_started' },
+        { title: '有效丙', kind: 'activity', deadline: `${localDate(5)} 23:59`, status: 'not_completed' }
+      ] } });
+      assert.deepEqual(plain(result.create.candidates.map(candidate => candidate.rowId)), ['c0', 'c2', 'c3']);
+    });
+
+    test('F12 空计划：无候选无 ignored 为 clarify，有 ignored 无候选仍为 create', () => {
+      const empty = createPlan({ create: { candidates: [], ignored: [] } });
+      assert.deepEqual(plain(empty), {
+        ok: true,
+        intent: 'clarify',
+        message: '没有识别到可新增的事项。',
+        omittedCount: 0
+      });
+      const onlyIgnored = createPlan({ create: { candidates: [], ignored: [{ text: '随口', reason: '无标题' }] } });
+      assert.equal(onlyIgnored.intent, 'create');
+      assert.equal(onlyIgnored.create.candidates.length, 0);
+      assert.equal(onlyIgnored.create.ignored.length, 1);
+    });
+  });
+
+  describe('F13 修改计划 normalizeUpdatePlan', () => {
+    const updatePlan = (payload, allItems, overrides) => h.fn('normalizeUpdatePlan')(planOptions(payload, allItems, overrides));
+    const baseItems = () => [
+      assistantRow(1, { title: '数据库课程设计', deadline: `${localDate(3)} 23:59` }),
+      assistantRow(2, { title: '校辩论赛报名', kind: 'activity', deadline: `${localDate(2)} 23:59`, status: 'not_completed' })
+    ];
+
+    test('F13.1 targetIds 缺失 / 非数组 / 空 → clarify 固定文案且无计划字段', () => {
+      const allItems = baseItems();
+      for (const payload of [
+        {},
+        { update: null },
+        { update: [] },
+        { update: {} },
+        { update: { targetIds: [] } },
+        { update: { targetIds: '1' } }
+      ]) {
+        const result = updatePlan(payload, allItems);
+        assert.deepEqual(plain(result), {
+          ok: true,
+          intent: 'clarify',
+          message: '没有找到匹配的事项。',
+          omittedCount: 0
+        });
+        assert.equal(result.update, undefined);
+      }
+    });
+
+    test('F13.1 不存在 id 的 note 追加在说明后', () => {
+      const result = updatePlan({ message: '改一下', update: { targetIds: [1, 9], changes: { title: '新标题' } } }, baseItems());
+      assert.equal(result.intent, 'update');
+      assert.equal(result.update.targets.length, 1);
+      assert.equal(result.message, '改一下；未找到事项 id：9');
+    });
+
+    test('F13.1 超出摘要 id 的 note 与目标解析', () => {
+      const allItems = baseItems().concat([assistantRow(101, { title: '摘要外事项' })]);
+      const result = updatePlan(
+        { message: '改一下', update: { targetIds: [1, 101], changes: { title: '新标题' } } },
+        allItems,
+        { summaryItems: baseItems() }
+      );
+      assert.equal(result.update.targets.length, 1);
+      assert.equal(result.message, '改一下；超出本次可操作范围的事项 id：101');
+    });
+
+    test('F13.1 targetIds 非空但全无效 → clarify 且带真实 note', () => {
+      const allItems = baseItems().concat([assistantRow(101, { title: '摘要外事项' })]);
+      const result = updatePlan({ update: { targetIds: [101], changes: { title: '新标题' } } }, allItems, { summaryItems: baseItems() });
+      assert.equal(result.intent, 'clarify');
+      assert.equal(result.message, '没有找到匹配的事项。；超出本次可操作范围的事项 id：101');
+      assert.equal(result.update, undefined);
+    });
+
+    test('F13.1 唯一目标与多目标的 applyToId / ambiguous', () => {
+      const allItems = baseItems();
+      const unique = updatePlan({ update: { targetIds: [1], changes: { title: '新标题' } } }, allItems);
+      assert.equal(unique.update.applyToId, 1);
+      assert.equal(unique.update.ambiguous, false);
+      const multi = updatePlan({ update: { targetIds: [1, 2], changes: { title: '新标题' } } }, allItems);
+      assert.equal(multi.update.applyToId, null);
+      assert.equal(multi.update.ambiguous, true);
+      assert.deepEqual(plain(multi.update.targets.map(target => target.id)), [1, 2]);
+    });
+
+    test('F13.1 同名扩展：进入 targets、显式在前扩展按 id 升序', () => {
+      const allItems = [
+        assistantRow(1, { title: '同名事项' }),
+        assistantRow(2, { title: '另一个事项' }),
+        assistantRow(9, { title: '同名事项', kind: 'activity' })
+      ];
+      const result = updatePlan(
+        { update: { targetIds: [1], changes: { title: '新标题' } } },
+        allItems,
+        { summaryItems: allItems.slice(0, 2) }
+      );
+      assert.deepEqual(plain(result.update.targets.map(target => target.id)), [1, 9]);
+      assert.equal(result.update.targets[0].isAmbiguous, true);
+      assert.equal(result.update.targets[1].isAmbiguous, true);
+      assert.equal(result.update.ambiguous, true);
+      assert.equal(result.update.applyToId, null);
+    });
+
+    test('F13.2 changes.deadline：合法补 23:59，非法标记 deadlineInvalid', () => {
+      const allItems = baseItems();
+      const valid = updatePlan({ update: { targetIds: [1], changes: { deadline: localDate(6) } } }, allItems);
+      assert.equal(valid.update.changes.deadline, `${localDate(6)} 23:59`);
+      assert.equal(valid.update.deadlineInvalid, false);
+      const invalid = updatePlan({ update: { targetIds: [1], changes: { deadline: '2026-02-31 10:00' } } }, allItems);
+      assert.equal(invalid.intent, 'update');
+      assert.equal(invalid.update.deadlineInvalid, true);
+      assert.equal(invalid.update.changes.deadline, null);
+      const nonString = updatePlan({ update: { targetIds: [1], changes: { deadline: 123 } } }, allItems);
+      assert.equal(nonString.update.deadlineInvalid, true);
+      assert.equal(nonString.update.changes.deadline, null);
+    });
+
+    test('F13.2 changes.title / description / workType 与未知键', () => {
+      const allItems = baseItems();
+      const result = updatePlan({
+        update: {
+          targetIds: [1],
+          changes: { title: '  新标题 ', description: '', workType: 'invalid', id: 1, created_at: 'x' }
+        }
+      }, allItems);
+      assert.deepEqual(plain(result.update.changes), { title: '新标题', description: '' });
+      assert.equal(result.update.titleTooLong, false);
+      const emptyTitle = updatePlan({ update: { targetIds: [1], changes: { title: '   ' } } }, allItems);
+      assert.equal(emptyTitle.intent, 'clarify');
+      assert.equal(emptyTitle.message, '请说明要修改的内容。');
+      const tooLong = updatePlan({ update: { targetIds: [1], changes: { title: 'x'.repeat(121) } } }, allItems);
+      assert.equal(tooLong.update.titleTooLong, true);
+      assert.equal(tooLong.update.changes.title.length, 121);
+    });
+
+    test('F13.2 changes.status：对全部显式目标合法才保留', () => {
+      const multi = updatePlan({ update: { targetIds: [1, 2], changes: { status: 'in_progress' } } }, baseItems());
+      assert.equal(multi.intent, 'update');
+      assert.equal(multi.update.statusInvalid, true);
+      assert.equal(Object.prototype.hasOwnProperty.call(multi.update.changes, 'status'), true);
+      assert.equal(multi.update.changes.status, null);
+      const single = updatePlan({ update: { targetIds: [1], changes: { status: 'in_progress' } } }, baseItems());
+      assert.equal(single.update.changes.status, 'in_progress');
+      assert.equal(single.update.statusInvalid, false);
+    });
+
+    test('F13.3 仅非法 status 仍返回 update 计划', () => {
+      const result = updatePlan({ message: '改状态', update: { targetIds: [1], changes: { status: 'not_completed' } } }, baseItems());
+      assert.equal(result.intent, 'update');
+      assert.equal(result.update.statusInvalid, true);
+      assert.equal(result.update.changes.status, null);
+      assert.equal(result.update.targets.length, 1);
+      assert.equal(result.update.applyToId, 1);
+      assert.equal(result.message, '改状态');
+      assert.ok(!result.message.includes('请说明要修改的内容'));
+    });
+
+    test('F13.2 changes.status：非字符串视为提供了但不合法', () => {
+      for (const value of [5, false, { a: 1 }, ['x']]) {
+        const result = updatePlan({ message: '改状态', update: { targetIds: [1], changes: { status: value } } }, baseItems());
+        assert.equal(result.intent, 'update');
+        assert.equal(result.update.statusInvalid, true);
+        assert.equal(Object.prototype.hasOwnProperty.call(result.update.changes, 'status'), true);
+        assert.equal(result.update.changes.status, null);
+        assert.equal(result.update.targets.length, 1);
+        assert.ok(!result.message.includes('请说明要修改的内容'));
+      }
+    });
+
+    test('F13.2 kind：等于全部显式目标则忽略，不等则 clarify', () => {
+      const allItems = baseItems();
+      const same = updatePlan({ update: { targetIds: [1], changes: { kind: 'assignment', title: '新标题' } } }, allItems);
+      assert.equal(same.intent, 'update');
+      assert.equal(Object.prototype.hasOwnProperty.call(same.update.changes, 'kind'), false);
+      const conflict = updatePlan({ update: { targetIds: [1], changes: { kind: 'activity' } } }, allItems);
+      assert.equal(conflict.intent, 'clarify');
+      assert.equal(conflict.message, '助手不能修改事项类型，请到对应列表的编辑表单操作。');
+      assert.equal(conflict.update, undefined);
+    });
+
+    test('F13.2 同名扩展类型不同不影响 kind / status 合法性判定', () => {
+      const allItems = [
+        assistantRow(1, { title: '同名事项', kind: 'assignment' }),
+        assistantRow(2, { title: '另一个事项' }),
+        assistantRow(9, { title: '同名事项', kind: 'activity' })
+      ];
+      const result = updatePlan(
+        { update: { targetIds: [1], changes: { kind: 'assignment', status: 'in_progress' } } },
+        allItems,
+        { summaryItems: allItems.slice(0, 2) }
+      );
+      assert.equal(result.intent, 'update');
+      assert.equal(result.update.statusInvalid, false);
+      assert.equal(result.update.changes.status, 'in_progress');
+      assert.equal(result.update.changes.kind, undefined);
+    });
+
+    test('F13.2 空变更：无键且无非法标记 → clarify，否则 update', () => {
+      const allItems = baseItems();
+      const empty = updatePlan({ update: { targetIds: [1], changes: {} } }, allItems);
+      assert.equal(empty.intent, 'clarify');
+      assert.equal(empty.message, '请说明要修改的内容。');
+      assert.equal(empty.update, undefined);
+      const nullable = updatePlan({ update: { targetIds: [1], changes: { deadline: null, status: '' } } }, allItems);
+      assert.equal(nullable.intent, 'clarify');
+    });
+
+    test('F13.2 活动目标上的合法 workType 原样保留', () => {
+      const result = updatePlan({ update: { targetIds: [2], changes: { workType: 'team' } } }, baseItems());
+      assert.equal(result.intent, 'update');
+      assert.equal(result.update.changes.workType, 'team');
+      assert.equal(result.update.statusInvalid, false);
+      assert.equal(result.update.deadlineInvalid, false);
+    });
+  });
+
+  describe('F14 删除计划 normalizeDeletePlan', () => {
+    const deletePlan = (payload, allItems, overrides) => h.fn('normalizeDeletePlan')(planOptions(payload, allItems, overrides));
+    const baseItems = () => [
+      assistantRow(1, { title: '独立事项甲' }),
+      assistantRow(2, { title: '独立事项乙' }),
+      assistantRow(3, { title: '校辩论赛报名', kind: 'activity' })
+    ];
+
+    test('F14 唯一点名：默认勾选', () => {
+      const result = deletePlan({ delete: { targetIds: [3] } }, baseItems());
+      assert.equal(result.intent, 'delete');
+      assert.equal(result.delete.targets.length, 1);
+      assert.equal(result.delete.targets[0].isAmbiguous, false);
+      assert.equal(result.delete.targets[0].selected, true);
+    });
+
+    test('F14 同名（跨类型且含摘要外）：全部歧义且不勾选', () => {
+      const allItems = [
+        assistantRow(1, { title: '同名活动' }),
+        assistantRow(2, { title: '同名活动', kind: 'activity' }),
+        assistantRow(3, { title: '同名活动', kind: 'activity', deadline: `${localDate(5)} 18:00` })
+      ];
+      const result = deletePlan({ delete: { targetIds: [1] } }, allItems, { summaryItems: allItems.slice(0, 2) });
+      assert.deepEqual(plain(result.delete.targets.map(target => target.id)), [1, 2, 3]);
+      assert.ok(result.delete.targets.every(target => target.isAmbiguous === true && target.selected === false));
+    });
+
+    test('F14 混合同名与唯一目标：selected 按条计算', () => {
+      const allItems = [
+        assistantRow(1, { title: '同名活动' }),
+        assistantRow(2, { title: '同名活动' }),
+        assistantRow(3, { title: '独立事项' })
+      ];
+      const result = deletePlan({ delete: { targetIds: [1, 3] } }, allItems);
+      assert.deepEqual(plain(result.delete.targets.map(target => target.id)), [1, 3, 2]);
+      assert.equal(result.delete.targets[0].selected, false);
+      assert.equal(result.delete.targets[1].selected, true);
+      assert.equal(result.delete.targets[2].selected, false);
+    });
+
+    test('F14 note 文案与 update 规则一致', () => {
+      const allItems = [assistantRow(1, { title: '独立事项甲' }), assistantRow(101, { title: '摘要外事项' })];
+      const result = deletePlan({ message: '删除', delete: { targetIds: [1, 101] } }, allItems, { summaryItems: allItems.slice(0, 1) });
+      assert.equal(result.message, '删除；超出本次可操作范围的事项 id：101');
+      const missing = deletePlan({ message: '删除', delete: { targetIds: [1, 9] } }, allItems, { summaryItems: allItems.slice(0, 1) });
+      assert.equal(missing.message, '删除；未找到事项 id：9');
+    });
+
+    test('F14 全无效 / 缺失：clarify 且不带计划字段', () => {
+      const allItems = [assistantRow(1, { title: '独立事项甲' }), assistantRow(101, { title: '摘要外事项' })];
+      const invalid = deletePlan({ delete: { targetIds: [101] } }, allItems, { summaryItems: allItems.slice(0, 1) });
+      assert.equal(invalid.intent, 'clarify');
+      assert.equal(invalid.message, '没有找到匹配的事项。；超出本次可操作范围的事项 id：101');
+      assert.equal(invalid.delete, undefined);
+      const missing = deletePlan({ delete: { targetIds: [1] } }, [], {});
+      assert.equal(missing.intent, 'clarify');
+      assert.equal(missing.message, '没有找到匹配的事项。；未找到事项 id：1');
+      for (const payload of [{}, { delete: null }, { delete: {} }, { delete: { targetIds: [] } }]) {
+        const result = deletePlan(payload, baseItems());
+        assert.deepEqual(plain(result), {
+          ok: true,
+          intent: 'clarify',
+          message: '没有找到匹配的事项。',
+          omittedCount: 0
+        });
+      }
+    });
+
+    test('F14 目标顺序：显式按输入顺序，扩展按 id 升序', () => {
+      const allItems = [
+        assistantRow(1, { title: '甲' }),
+        assistantRow(2, { title: '同名的乙' }),
+        assistantRow(3, { title: '同名的乙' }),
+        assistantRow(4, { title: '同名的乙' })
+      ];
+      const ordered = deletePlan({ delete: { targetIds: [4, 1] } }, allItems);
+      assert.deepEqual(plain(ordered.delete.targets.map(target => target.id)), [4, 1, 2, 3]);
+    });
+
+    test('F14 不根据时间范围推导待删目标', () => {
+      const result = deletePlan({ delete: { range: { type: 'last_month' } } }, baseItems());
+      assert.equal(result.intent, 'clarify');
+      assert.equal(result.message, '没有找到匹配的事项。');
+      assert.equal(result.delete, undefined);
+    });
+  });
+
+  describe('F15 清理计划与 resolveRange 扩展', () => {
+    const cleanupPlan = (payload, allItems, overrides) => h.fn('normalizeCleanupPlan')(planOptions(payload, allItems, overrides));
+    const cleanupItems = () => [
+      assistantRow(1, { title: '上月已完成作业', deadline: monthDate(-1, 10, '09:00'), status: 'completed' }),
+      assistantRow(2, { title: '上月未完成作业', deadline: monthDate(-1, 20, '09:00'), status: 'not_started' }),
+      assistantRow(3, { title: '本月已完成活动', kind: 'activity', deadline: monthDate(0, 5, '10:00'), status: 'completed' }),
+      assistantRow(4, { title: '上月已完成活动', kind: 'activity', deadline: monthDate(-1, 25, '09:00'), status: 'completed' })
+    ];
+
+    test('F15.1 resolveRange：all 仅在 allowAll 时返回全区间', () => {
+      const resolve = h.fn('resolveRange');
+      assert.deepEqual(plain(resolve({ type: 'all' }, h.now(), { allowAll: true })), {
+        start: '0000-01-01',
+        end: '9999-12-31',
+        label: '全部时间'
+      });
+      assert.equal(resolve({ type: 'all' }, h.now()), null);
+      assert.equal(resolve({ type: 'all' }, h.now(), {}), null);
+    });
+
+    test('F15.2 过滤规则：仅已完成且在范围内，跨类型包含', () => {
+      const result = cleanupPlan({ cleanup: { range: { type: 'last_month' } } }, cleanupItems());
+      assert.equal(result.intent, 'cleanup');
+      assert.deepEqual(plain(result.cleanup.targets.map(target => target.id)), [1, 4]);
+      assert.ok(result.cleanup.targets.every(target => target.status === 'completed' && target.selected === true));
+    });
+
+    test('F15.2 闭区间首尾：start 00:00 与 end 23:59 均命中', () => {
+      const lastDay = new Date(h.now().getFullYear(), h.now().getMonth(), 0).getDate();
+      const items = [
+        assistantRow(1, { title: '首日', deadline: monthDate(-1, 1, '00:00'), status: 'completed' }),
+        assistantRow(2, { title: '末日', deadline: monthDate(-1, lastDay, '23:59'), status: 'completed' })
+      ];
+      const result = cleanupPlan({ cleanup: { range: { type: 'last_month' } } }, items);
+      assert.deepEqual(plain(result.cleanup.targets.map(target => target.id)), [1, 2]);
+    });
+
+    test('F15.2 排序：deadline 升序，同值 id 升序', () => {
+      const items = [
+        assistantRow(9, { title: '同刻乙', deadline: monthDate(-1, 10, '09:00'), status: 'completed' }),
+        assistantRow(5, { title: '同刻甲', deadline: monthDate(-1, 10, '09:00'), status: 'completed' }),
+        assistantRow(1, { title: '更早', deadline: monthDate(-1, 2, '09:00'), status: 'completed' })
+      ];
+      const result = cleanupPlan({ cleanup: { range: { type: 'last_month' } } }, items);
+      assert.deepEqual(plain(result.cleanup.targets.map(target => target.id)), [1, 5, 9]);
+      assert.ok(result.cleanup.targets.every(target => target.selected === true));
+    });
+
+    test('F15.2 空结果仍返回 cleanup 并给出固定文案与范围标签', () => {
+      const result = cleanupPlan({ message: '清理一下', cleanup: { range: { type: 'next_month' } } }, cleanupItems());
+      assert.equal(result.intent, 'cleanup');
+      assert.deepEqual(plain(result.cleanup.targets), []);
+      assert.equal(result.message, '没有符合条件的已完成事项。');
+      assert.equal(result.cleanup.rangeLabel, h.fn('resolveRange')({ type: 'next_month' }, h.now()).label);
+    });
+
+    test('F15.2 无范围 / 非法范围：clarify 且无 cleanup', () => {
+      for (const payload of [{}, { cleanup: null }, { cleanup: {} }, { cleanup: { range: { type: 'unknown' } } }]) {
+        const result = cleanupPlan(payload, cleanupItems());
+        assert.deepEqual(plain(result), {
+          ok: true,
+          intent: 'clarify',
+          message: '请补充清理范围（例如上个月、本月、今年、某个具体月份或全部已完成）。',
+          omittedCount: 0
+        });
+        assert.equal(result.cleanup, undefined);
+      }
+    });
+
+    test('F15.2 all 清理：包含跨月跨年的全部已完成事项', () => {
+      const result = cleanupPlan({ message: '清理全部', cleanup: { range: { type: 'all' } } }, cleanupItems());
+      assert.deepEqual(plain(result.cleanup.targets.map(target => target.id)), [1, 4, 3]);
+      assert.equal(result.cleanup.rangeLabel, '全部时间');
+      assert.equal(result.message, '清理全部');
+    });
+  });
+
+  describe('F16 assistant:parse 接线', () => {
+    const planDatabase = items => createFakeDatabase({
+      settings: { ai_endpoint: MOCK_ENDPOINT, ai_model: MODEL, ai_api_key: KEY },
+      items
+    });
+    const planSeedItems = () => [
+      assistantRow(1, { title: '数据库课程设计', deadline: `${localDate(3)} 23:59` }),
+      assistantRow(2, { title: '校辩论赛报名', kind: 'activity', deadline: `${localDate(2)} 23:59`, status: 'not_completed' }),
+      assistantRow(3, { title: '上月已完成作业', deadline: monthDate(-1, 10, '09:00'), status: 'completed' })
+    ];
+    const planPayloads = () => [
+      {
+        intent: 'create',
+        message: '已整理候选',
+        create: {
+          candidates: [{ title: '新事项', kind: 'assignment', deadline: `${localDate(5)} 23:59`, status: 'not_started' }]
+        }
+      },
+      { intent: 'update', message: '改一下', update: { targetIds: [1], changes: { title: '新标题' } } },
+      { intent: 'delete', message: '删除', delete: { targetIds: [2] } },
+      { intent: 'cleanup', message: '清理', cleanup: { range: { type: 'last_month' } } }
+    ];
+
+    test('F16 四种写意图直接透传计划字段并保留 omittedCount', async () => {
+      h.setDatabase(planDatabase(planSeedItems()));
+      const checks = [
+        result => {
+          assert.equal(result.create.candidates.length, 1);
+          assert.equal(result.message, '已整理候选');
+        },
+        result => {
+          assert.equal(result.update.targets.length, 1);
+          assert.equal(result.update.applyToId, 1);
+          assert.equal(result.update.changes.title, '新标题');
+        },
+        result => {
+          assert.equal(result.delete.targets.length, 1);
+          assert.equal(result.delete.targets[0].selected, true);
+        },
+        result => {
+          assert.deepEqual(plain(result.cleanup.targets.map(target => target.id)), [3]);
+        }
+      ];
+      const payloads = planPayloads();
+      for (let index = 0; index < payloads.length; index += 1) {
+        h.setFetch(() => Promise.resolve(chatEnvelope(JSON.stringify(payloads[index]))));
+        const result = await h.parse(`写意图 ${payloads[index].intent}`);
+        assert.equal(result.ok, true);
+        assert.equal(result.intent, payloads[index].intent);
+        assert.equal(result.omittedCount, 0);
+        checks[index](result);
+      }
+    });
+
+    test('F16 计划自身返回 clarify 时直接透传且不带计划字段', async () => {
+      h.setDatabase(planDatabase(planSeedItems()));
+      const scenarios = [
+        [{ intent: 'create', create: { candidates: [], ignored: [] } }, '没有识别到可新增的事项。'],
+        [{ intent: 'update', update: {} }, '没有找到匹配的事项。'],
+        [{ intent: 'update', update: { targetIds: [1], changes: {} } }, '请说明要修改的内容。'],
+        [{ intent: 'delete', delete: {} }, '没有找到匹配的事项。'],
+        [{ intent: 'cleanup', cleanup: {} }, '请补充清理范围（例如上个月、本月、今年、某个具体月份或全部已完成）。']
+      ];
+      for (const [payload, message] of scenarios) {
+        h.setFetch(() => Promise.resolve(chatEnvelope(JSON.stringify(payload))));
+        const result = await h.parse('计划归一化');
+        assert.equal(result.ok, true);
+        assert.equal(result.intent, 'clarify');
+        assert.equal(result.message, message);
+        for (const field of ['create', 'update', 'delete', 'cleanup', 'query']) {
+          assert.equal(result[field], undefined);
+        }
+      }
+    });
+
+    test('F16 四种写意图全流程零写入', async () => {
+      const db = planDatabase(planSeedItems());
+      h.setDatabase(db);
+      const settingsBefore = JSON.stringify(settingsSnapshot(db));
+      const itemsBefore = h.itemsSnapshot();
+      for (const payload of planPayloads()) {
+        h.setFetch(() => Promise.resolve(chatEnvelope(JSON.stringify(payload))));
+        await h.parse(`写意图 ${payload.intent}`);
+      }
+      assert.equal(JSON.stringify(settingsSnapshot(db)), settingsBefore);
+      assert.equal(h.itemsSnapshot(), itemsBefore);
+    });
+
+    test('F16 疑似重复检测使用全量而非摘要', async () => {
+      const items = [];
+      for (let id = 1; id <= 100; id += 1) {
+        const isAssignment = id % 2 === 1;
+        items.push(assistantRow(id, {
+          title: `近期待办 ${id}`,
+          kind: isAssignment ? 'assignment' : 'activity',
+          deadline: `${localDate(id)} 23:59`,
+          status: isAssignment ? 'not_started' : 'not_completed'
+        }));
+      }
+      items.push(assistantRow(101, { title: '数据库课程设计', deadline: monthDate(-1, 3, '10:00'), status: 'completed' }));
+      h.setDatabase(planDatabase(items));
+
+      const summary = h.fn('buildAssistantSummary')(h.now(), h.fn('readItemsForAssistant')());
+      assert.ok(!summary.items.some(item => item.id === 101), '第 101 条应被摘要省略');
+
+      h.setFetch(() => Promise.resolve(chatEnvelope(JSON.stringify({
+        intent: 'create',
+        create: {
+          candidates: [{ title: '数据库课设', kind: 'assignment', deadline: `${localDate(5)} 23:59`, status: 'not_started' }]
+        }
+      }))));
+      const result = await h.parse('新增数据库课设');
+      assert.equal(result.intent, 'create');
+      assert.equal(result.omittedCount, 1);
+      assert.equal(result.create.candidates[0].duplicate.id, 101);
+      assert.equal(result.create.candidates[0].selected, false);
+    });
+
+    test('F16 摘要外 id：部分解析成功带 note，全部无效 clarify 带 note', async () => {
+      const items = [];
+      for (let id = 1; id <= 100; id += 1) {
+        items.push(assistantRow(id, { title: `近期待办 ${id}`, deadline: `${localDate(id)} 23:59`, status: 'not_started' }));
+      }
+      items.push(assistantRow(101, { title: '摘要外事项', deadline: monthDate(-1, 3, '10:00'), status: 'completed' }));
+      h.setDatabase(planDatabase(items));
+
+      h.setFetch(() => Promise.resolve(chatEnvelope(JSON.stringify({
+        intent: 'update',
+        message: '改一下',
+        update: { targetIds: [1, 101], changes: { title: '新标题' } }
+      }))));
+      const partial = await h.parse('修改两条');
+      assert.equal(partial.intent, 'update');
+      assert.equal(partial.update.targets.length, 1);
+      assert.equal(partial.message, '改一下；超出本次可操作范围的事项 id：101');
+
+      h.setFetch(() => Promise.resolve(chatEnvelope(JSON.stringify({
+        intent: 'update',
+        update: { targetIds: [101], changes: { title: '新标题' } }
+      }))));
+      const invalid = await h.parse('修改一条');
+      assert.equal(invalid.intent, 'clarify');
+      assert.ok(invalid.message.startsWith('没有找到匹配的事项。'));
+      assert.ok(invalid.message.includes('超出本次可操作范围的事项 id：101'));
+      assert.equal(invalid.update, undefined);
+    });
+  });
+
+  // ============ F10–F16 契约补强 ============
+
+  describe('F10–F16 契约补强', () => {
+    const planRows = () => [
+      assistantRow(1, { title: '数据库课程设计', deadline: `${localDate(3)} 23:59` }),
+      assistantRow(2, { title: '校辩论赛报名', kind: 'activity', deadline: `${localDate(2)} 23:59`, status: 'not_completed' })
+    ];
+    const createPlan = (payload, allItems = []) => h.fn('normalizeCreatePlan')(planOptions(payload, allItems));
+    const updatePlan = (payload, allItems, overrides) => h.fn('normalizeUpdatePlan')(planOptions(payload, allItems, overrides));
+    const deletePlan = (payload, allItems, overrides) => h.fn('normalizeDeletePlan')(planOptions(payload, allItems, overrides));
+    const cleanupPlan = (payload, allItems, overrides) => h.fn('normalizeCleanupPlan')(planOptions(payload, allItems, overrides));
+
+    test('F12 候选输出：顶层与候选键顺序固定，statusAdjusted 恒为 false', () => {
+      const result = createPlan({
+        message: '已整理',
+        create: { candidates: [{ title: '新作业', kind: 'assignment', deadline: `${localDate(5)} 23:59`, status: 'not_started' }] }
+      });
+      assert.deepEqual(Object.keys(result), ['ok', 'intent', 'message', 'omittedCount', 'create']);
+      const candidate = result.create.candidates[0];
+      assert.deepEqual(Object.keys(candidate), [
+        'rowId', 'title', 'kind', 'status', 'description', 'workType',
+        'deadline', 'deadlineIssue', 'titleTooLong', 'statusInvalid', 'statusAdjusted',
+        'expired', 'duplicate', 'selected', 'executable'
+      ]);
+      assert.equal(candidate.statusAdjusted, false);
+      assert.equal(candidate.rowId, 'c0');
+    });
+
+    test('F12 create 源非普通对象：缺失 / null / 数组 / 非对象均返回 clarify', () => {
+      for (const payload of [{}, { create: null }, { create: [] }, { create: 'x' }, { create: 5 }]) {
+        const result = createPlan(payload);
+        assert.deepEqual(plain(result), {
+          ok: true,
+          intent: 'clarify',
+          message: '没有识别到可新增的事项。',
+          omittedCount: 0
+        }, `${JSON.stringify(payload)} 应归一化为空计划`);
+      }
+    });
+
+    test('F12 message：非字符串回落空串，字符串原值不 trim', () => {
+      const valid = { create: { candidates: [{ title: '新作业', kind: 'assignment', deadline: `${localDate(5)} 23:59`, status: 'not_started' }] } };
+      const nonString = createPlan({ message: 42, ...valid });
+      assert.equal(nonString.message, '');
+      const raw = createPlan({ message: '  已整理  ', ...valid });
+      assert.equal(raw.message, '  已整理  ');
+    });
+
+    test('F12 status：空白字符串按缺失取默认，非字符串非空值标记无效', () => {
+      const blank = createPlan({ create: { candidates: [{ title: '空白状态', kind: 'activity', deadline: `${localDate(5)} 23:59`, status: '   ' }] } });
+      assert.equal(blank.create.candidates[0].status, 'not_completed');
+      assert.equal(blank.create.candidates[0].statusInvalid, false);
+      assert.equal(blank.create.candidates[0].executable, true);
+      const nonString = createPlan({ create: { candidates: [{ title: '非字符串状态', kind: 'assignment', deadline: `${localDate(5)} 23:59`, status: 0 }] } });
+      assert.equal(nonString.create.candidates[0].status, null);
+      assert.equal(nonString.create.candidates[0].statusInvalid, true);
+      assert.equal(nonString.create.candidates[0].executable, false);
+    });
+
+    test('F13 计划字段：键顺序固定、update.message 与顶层一致、omittedCount 透传', () => {
+      const result = updatePlan(
+        { message: '改一下', update: { targetIds: [1], changes: { title: '新标题' } } },
+        planRows(),
+        { omittedCount: 2 }
+      );
+      assert.deepEqual(Object.keys(result), ['ok', 'intent', 'message', 'omittedCount', 'update']);
+      assert.deepEqual(Object.keys(result.update), [
+        'targets', 'ambiguous', 'applyToId', 'changes', 'statusInvalid', 'deadlineInvalid', 'titleTooLong', 'message'
+      ]);
+      assert.deepEqual(Object.keys(result.update.targets[0]), ['id', 'title', 'kind', 'deadline', 'status', 'isAmbiguous']);
+      assert.equal(result.update.message, result.message);
+      assert.equal(result.message, '改一下');
+      assert.equal(result.omittedCount, 2);
+    });
+
+    test('F13 changes 非普通对象：按无变更处理并返回 clarify', () => {
+      for (const changes of [[], 'x', null]) {
+        const result = updatePlan({ update: { targetIds: [1], changes } }, planRows());
+        assert.equal(result.intent, 'clarify');
+        assert.equal(result.message, '请说明要修改的内容。');
+        assert.equal(result.update, undefined);
+      }
+    });
+
+    test('F14 targetIds 非数组或元素非数字：固定 clarify，不推导范围', () => {
+      for (const payload of [
+        { delete: { targetIds: '3' } },
+        { delete: { targetIds: {} } },
+        { delete: { targetIds: [['3']] } }
+      ]) {
+        const result = deletePlan(payload, planRows());
+        assert.deepEqual(plain(result), {
+          ok: true,
+          intent: 'clarify',
+          message: '没有找到匹配的事项。',
+          omittedCount: 0
+        });
+        assert.equal(result.delete, undefined);
+      }
+    });
+
+    test('F15 cleanup：非字符串 message 回落空串，非法 kind 不参与清理', () => {
+      const items = [
+        assistantRow(1, { title: '已完成作业', deadline: monthDate(-1, 5, '09:00'), status: 'completed' }),
+        assistantRow(2, { title: '已完成日记', kind: 'diary', deadline: monthDate(-1, 10, '09:00'), status: 'completed' }),
+        assistantRow(3, { title: '已完成活动', kind: 'activity', deadline: monthDate(-1, 20, '09:00'), status: 'completed' })
+      ];
+      const result = cleanupPlan({ message: 42, cleanup: { range: { type: 'last_month' } } }, items);
+      assert.equal(result.intent, 'cleanup');
+      assert.deepEqual(plain(result.cleanup.targets.map(target => target.id)), [1, 3]);
+      assert.equal(result.message, '');
+      assert.ok(result.cleanup.targets.every(target => target.kind !== 'diary'));
+    });
+
+    test('F15.1 resolveRange：options 为 null 时不崩溃，all 仍返回 null', () => {
+      const resolve = h.fn('resolveRange');
+      assert.equal(resolve({ type: 'all' }, h.now(), null), null);
+      const month = resolve({ type: 'this_month' }, h.now(), null);
+      assert.ok(month, '普通范围不应受 options 影响');
+      assert.equal(typeof month.start, 'string');
+      assert.equal(typeof month.end, 'string');
+    });
+
+    test('F16.1 buildAssistantSummary：使用传入 rows 而非数据库，截取与 omit 计数不变', () => {
+      h.setDatabase(createFakeDatabase({
+        items: [assistantRow(1), assistantRow(2)]
+      }));
+      const build = h.fn('buildAssistantSummary');
+      assert.deepEqual(plain(build(h.now(), [])), { items: [], omittedCount: 0 });
+      assert.equal(build(h.now()).items.length, 2, '不传 rows 时仍自行读取数据库');
+
+      const rows = [];
+      for (let id = 1; id <= 101; id += 1) rows.push(assistantRow(id));
+      const summary = build(h.now(), rows);
+      assert.equal(summary.items.length, 100);
+      assert.equal(summary.omittedCount, 1);
+      assert.ok(!summary.items.some(item => item.id === 101), '距离最远的第 101 条应被截断');
     });
   });
 
