@@ -104,7 +104,8 @@ document.querySelector('.widget-tabs').addEventListener('keydown', event => {
 });
 
 views.deadlines.addEventListener('click', event => {
-  if (event.target.closest('.todo-row')) api.widget.openMain();
+  const row = event.target.closest('.todo-row');
+  if (row) api.widget.openItem(Number(row.dataset.id)).catch(() => {});
 });
 views.habits.addEventListener('click', event => {
   const habitRow = event.target.closest('.widget-habit-row');

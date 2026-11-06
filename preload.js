@@ -6,7 +6,8 @@ contextBridge.exposeInMainWorld('deadlineDesk', {
     create: input => ipcRenderer.invoke('items:create', input),
     update: (id, input) => ipcRenderer.invoke('items:update', id, input),
     setStatus: (id, status) => ipcRenderer.invoke('items:status', id, status),
-    remove: id => ipcRenderer.invoke('items:delete', id)
+    remove: id => ipcRenderer.invoke('items:delete', id),
+    onOpenRequest: callback => ipcRenderer.on('items:open-request', (_event, id) => callback(id))
   },
   attachments: {
     select: () => ipcRenderer.invoke('attachments:add'),
@@ -39,6 +40,7 @@ contextBridge.exposeInMainWorld('deadlineDesk', {
     getData: () => ipcRenderer.invoke('widget:get'),
     setPinned: pinned => ipcRenderer.invoke('widget:set-pinned', pinned),
     openMain: () => ipcRenderer.invoke('widget:open-main'),
+    openItem: id => ipcRenderer.invoke('widget:open-item', id),
     resize: height => ipcRenderer.invoke('widget:resize', height),
     dragStart: (x, y) => ipcRenderer.send('widget:drag-start', x, y),
     dragMove: (x, y) => ipcRenderer.send('widget:drag-move', x, y),

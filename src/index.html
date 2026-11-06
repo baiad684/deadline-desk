@@ -230,7 +230,7 @@
             <section class="settings-group panel">
               <header class="panel-header"><div><h2>桌面小组件</h2><span>常驻桌面的截止提醒</span></div></header>
               <div class="setting-row"><div><strong>显示桌面小组件</strong><p>在桌面显示一个置顶小卡片，展示未来 7 天内到期的未完成事项，数据实时同步。</p></div><label class="switch"><input type="checkbox" id="widgetToggle"><span></span></label></div>
-              <div class="setting-note"><span data-icon="info"></span><p>小组件独立于主窗口；按住卡片空白处可拖动，位置会自动记住。点击卡片条目可回到主窗口。</p></div>
+              <div class="setting-note"><span data-icon="info"></span><p>小组件独立于主窗口；按住卡片空白处可拖动，位置会自动记住。点击截止事项可打开对应事项详情。</p></div>
             </section>
             <section class="settings-group panel">
               <header class="panel-header"><div><h2>备份与恢复</h2><span>数据库和全部附件</span></div></header>
@@ -315,6 +315,7 @@
     <div class="item-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="detailTitle">
       <header class="modal-header"><button type="button" class="icon-button" id="detailBackButton" title="返回当天待办" aria-label="返回当天待办"><span data-icon="left"></span></button><div><h2 id="detailTitle">事项详情</h2><p id="detailSubtitle"></p></div><button type="button" class="icon-button detail-close" title="关闭" aria-label="关闭"><span data-icon="close"></span></button></header>
       <div class="item-detail-body" id="itemDetailBody"></div>
+      <footer class="modal-footer detail-footer" id="detailFooter"></footer>
     </div>
   </div>
 

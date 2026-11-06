@@ -40,6 +40,9 @@ const state = {
   animateTodayRows: true,
   justCompletedId: null,
   confirmResolver: null,
+  detailItemId: null,
+  detailOrigin: 'day',
+  detailOpener: null,
   itemFormBaseline: null,
   notificationsEnabled: true,
   diaryDates: new Set(),
@@ -64,10 +67,21 @@ function focusableIn(root) {
   return [...root.querySelectorAll(FOCUSABLE)].filter(node => node.getClientRects().length > 0);
 }
 
-function openModalLayer(backdrop) {
-  if (!backdrop || modalStack.some(layer => layer.backdrop === backdrop)) return;
-  const active = document.activeElement;
+function openModalLayer(backdrop, opener = null) {
+  if (!backdrop) return;
+  const existing = modalStack.find(layer => layer.backdrop === backdrop);
+  if (existing) {
+    // 详情已打开时再次从小组件进入：用新的显式 opener 覆盖旧值；
+    // 未传 opener 时保持原值，不影响当天待办路径
+    if (opener && document.contains(opener) && !backdrop.contains(opener)) existing.opener = opener;
+    return;
+  }
+  // 显式 opener 优先；未传时沿用既有 activeElement（当天待办路径依赖）
+  const active = opener && document.contains(opener) ? opener : document.activeElement;
+  // 后开的弹窗必须压在先开的弹窗之上；仅靠 DOM 顺序会让详情挡住从详情打开的编辑表单
+  const topZ = modalStack.reduce((max, layer) => Math.max(max, Number(layer.backdrop.style.zIndex) || 20), 20);
   modalStack.push({ backdrop, opener: active && !backdrop.contains(active) ? active : null });
+  backdrop.style.zIndex = String(topZ + 1);
   const first = focusableIn(backdrop)[0];
   if (first) setTimeout(() => first.focus(), 0);
 }
@@ -348,31 +362,81 @@ function closeDayItems() {
   closeModalLayer($('#dayItemsModal'));
 }
 
-function openItemDetail(item) {
+function detailActionsHtml(item) {
+  return `<button type="button" class="secondary-button" data-action="edit" data-id="${item.id}"><span data-icon="edit"></span>编辑内容</button>`;
+}
+
+function detailStatusOptions(item) {
+  return item.kind === 'assignment' ? ['not_started', 'in_progress', 'completed'] : ['not_completed', 'completed'];
+}
+
+function openItemDetail(item, { origin = 'day', opener = null } = {}) {
   if (!item) return;
+  const detailWasTop = modalStack[modalStack.length - 1]?.backdrop === $('#itemDetailModal');
+  state.detailItemId = item.id;
+  state.detailOrigin = origin;
+  state.detailOpener = opener;
   $('#detailTitle').textContent = item.title;
   $('#detailSubtitle').textContent = `${kindLabel(item)} · ${formatDate(item.deadline, true)}`;
   const typeBadge = item.kind === 'assignment' ? `<span class="badge ${item.work_type === 'team' ? 'team' : 'personal'}">${item.work_type === 'team' ? '团队' : '个人'}</span>` : '<span class="badge progress">活动</span>';
   const timingClass = daysUntil(item.deadline) <= 1 ? 'warning' : 'progress';
+  const statusOptions = detailStatusOptions(item)
+    .map(status => `<option value="${status}"${status === item.status ? ' selected' : ''}>${escapeHtml(statusLabel({ status }))}</option>`)
+    .join('');
   const attachments = item.attachments.length ? `<div class="detail-attachments"><strong>要求附件</strong>${item.attachments.map(file => `<button type="button" class="detail-attachment" data-detail-attachment="${file.id}"><span data-icon="file"></span><span class="detail-attachment-copy"><strong>${escapeHtml(file.original_name)}</strong><span>${formatSize(file.size)}</span></span><span data-icon="external"></span></button>`).join('')}</div>` : '';
   $('#itemDetailBody').innerHTML = `<div class="detail-badges">${typeBadge}<span class="badge ${statusClass(item)}">${escapeHtml(statusLabel(item))}</span><span class="badge ${timingClass}">${escapeHtml(timingLabel(item))}</span></div>
-    <div class="detail-grid"><div class="detail-block"><span>截止时间</span><strong>${formatDate(item.deadline, true)}</strong></div><div class="detail-block"><span>当前状态</span><strong>${escapeHtml(statusLabel(item))}</strong></div><div class="detail-block full"><span>要求说明</span><strong>${escapeHtml(item.description || '暂无补充说明')}</strong></div></div>${attachments}`;
+    <div class="detail-grid"><div class="detail-block"><span>截止时间</span><strong>${formatDate(item.deadline, true)}</strong></div><div class="detail-block"><span>当前状态</span><select class="detail-status-select" id="detailStatusSelect" data-id="${item.id}" aria-label="修改当前状态">${statusOptions}</select></div><div class="detail-block full"><span>要求说明</span><strong>${escapeHtml(item.description || '暂无补充说明')}</strong></div></div>${attachments}`;
   mountIcons($('#itemDetailBody'));
+  $('#detailFooter').innerHTML = detailActionsHtml(item);
+  mountIcons($('#detailFooter'));
+  // confirmModal 在 DOM 中晚于 itemDetailModal，不先收起会压在详情上方
+  if (origin === 'widget' && state.confirmResolver) resolveConfirmation(false);
   $('#dayItemsModal').classList.remove('open');
+  $('#dayItemsModal').setAttribute('aria-hidden', 'true');
   $('#itemDetailModal').classList.add('open');
   $('#itemDetailModal').setAttribute('aria-hidden', 'false');
   closeModalLayer($('#dayItemsModal'));
-  openModalLayer($('#itemDetailModal'));
+  $('#detailBackButton').classList.toggle('hidden', origin !== 'day');
+  openModalLayer($('#itemDetailModal'), opener);
+  // 详情原本就是栈顶时，重渲染后主动把焦点放回第一个可聚焦元素；
+  // 否则不抢焦点，由 openModalLayer 的既有逻辑处理首次打开
+  if (detailWasTop) {
+    const first = focusableIn($('#itemDetailModal'))[0];
+    if (first) setTimeout(() => first.focus(), 0);
+  }
 }
 
 function closeItemDetail(returnToDay = false) {
   $('#itemDetailModal').classList.remove('open');
   $('#itemDetailModal').setAttribute('aria-hidden', 'true');
   closeModalLayer($('#itemDetailModal'));
+  state.detailItemId = null;
+  state.detailOrigin = 'day';
+  state.detailOpener = null;
   if (returnToDay) {
     $('#dayItemsModal').classList.add('open');
+    $('#dayItemsModal').setAttribute('aria-hidden', 'false');
     openModalLayer($('#dayItemsModal'));
   }
+}
+
+function refreshOpenItemDetail() {
+  if (!state.detailItemId || !$('#itemDetailModal').classList.contains('open')) return;
+  const item = state.items.find(entry => entry.id === state.detailItemId);
+  if (!item) {
+    closeItemDetail();
+    return;
+  }
+  // 从小组件进入时，编辑事项状态/截止时间后背景页也要跟着换到正确列表
+  if (state.detailOrigin === 'widget') {
+    const page = routePageForItem(item);
+    if (state.currentPage !== page) {
+      resetPageFilter(page);
+      switchPage(page);
+      renderAll();
+    }
+  }
+  openItemDetail(item, { origin: state.detailOrigin, opener: state.detailOpener });
 }
 
 function renderAssignments() {
@@ -576,7 +640,60 @@ async function refreshItems() {
   if (items) {
     state.items = items;
     renderAll();
+    refreshOpenItemDetail();
   }
+}
+
+// ---------- 小组件跳转 ----------
+let openItemRequestSeq = 0;
+
+function syncSegmentedFilter(containerSelector, filter) {
+  $$(`${containerSelector} button`).forEach(button => {
+    const active = button.dataset.filter === filter;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+}
+
+function resetPageFilter(page) {
+  if (page === 'assignments') {
+    state.assignmentFilter = 'all';
+    syncSegmentedFilter('#assignmentFilters', 'all');
+  } else if (page === 'activities') {
+    state.activityFilter = 'all';
+    syncSegmentedFilter('#activityFilters', 'all');
+  }
+}
+
+function routePageForItem(item) {
+  if (isOverdue(item)) return 'overdue';
+  return item.kind === 'assignment' ? 'assignments' : 'activities';
+}
+
+async function openItemById(id) {
+  // 连续点击多行时以最后一次请求为准；
+  // 直接拉取而不是复用 refreshItems()：后者失败时只 toast，会留下旧 state.items
+  const seq = ++openItemRequestSeq;
+  const items = await execute(() => api.items.list());
+  if (seq !== openItemRequestSeq || !items) return;
+
+  state.items = items;
+  // 拉取成功后再清搜索，避免失败时出现“输入框已空、列表仍是旧筛选结果”
+  state.search = '';
+  $('#searchInput').value = '';
+
+  const item = items.find(entry => entry.id === Number(id));
+  if (!item) {
+    showToast('事项已不存在', true);
+    renderAll();
+    return;
+  }
+
+  const page = routePageForItem(item);
+  resetPageFilter(page);
+  switchPage(page);
+  renderAll();
+  openItemDetail(item, { origin: 'widget', opener: $('.nav-item.active') });
 }
 
 // ---------- 日记 ----------
@@ -967,6 +1084,14 @@ async function saveItem(event) {
   await refreshItems();
 }
 
+async function updateDetailStatus(id, status) {
+  const item = state.items.find(entry => entry.id === id);
+  if (!item || item.status === status) return;
+  const updated = await execute(() => api.items.setStatus(id, status), '状态已更新');
+  if (updated) await refreshItems();
+  else refreshOpenItemDetail();
+}
+
 async function handleItemAction(button) {
   const id = Number(button.dataset.id);
   const item = state.items.find(entry => entry.id === id);
@@ -1033,6 +1158,10 @@ function bindEvents() {
     const attachmentButton = event.target.closest('[data-detail-attachment]');
     if (attachmentButton) execute(() => api.attachments.open(Number(attachmentButton.dataset.detailAttachment)));
   });
+  $('#itemDetailBody').addEventListener('change', event => {
+    if (!event.target.matches('#detailStatusSelect')) return;
+    updateDetailStatus(Number(event.target.dataset.id), event.target.value);
+  });
 
   $('#searchInput').addEventListener('input', event => { state.search = event.target.value.trim(); renderAll(); });
   document.addEventListener('keydown', event => {
@@ -1050,8 +1179,9 @@ function bindEvents() {
     if (event.key === 'Escape') {
       if (!modalStack.length) return;
       event.preventDefault();
+      const top = modalStack[modalStack.length - 1]?.backdrop;
       if (state.confirmResolver) { resolveConfirmation(false); return; }
-      if ($('#itemModal').classList.contains('open') && isItemFormDirty()) {
+      if (top?.id === 'itemModal' && isItemFormDirty()) {
         askConfirmation('放弃未保存的修改？', '关闭后本次填写的内容不会保存。', '放弃修改')
           .then(confirmed => { if (confirmed) closeItemModal(); });
         return;
@@ -1211,6 +1341,7 @@ function bindEvents() {
     if (remove) deleteHabit(Number(remove.dataset.habitDelete));
   });
   api.habits.onChanged(refreshHabits);
+  api.items.onOpenRequest(openItemById);
   window.addEventListener('beforeunload', () => flushDiarySave());
 }
 

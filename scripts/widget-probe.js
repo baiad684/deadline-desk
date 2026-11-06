@@ -22,6 +22,65 @@ async function widgetBounds(electronApp) {
   });
 }
 
+async function waitStableWidgetBounds(electronApp) {
+  // 连续两次采样一致才认为 widget:resize 的高度上报已落定
+  let previous = null;
+  let stable = 0;
+  for (let i = 0; i < 20 && stable < 2; i++) {
+    const current = await widgetBounds(electronApp);
+    stable = previous && current
+      && previous.x === current.x && previous.y === current.y
+      && previous.width === current.width && previous.height === current.height
+      ? stable + 1 : 0;
+    previous = current;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  if (!previous) return null;
+  if (stable < 2) throw new Error('小组件窗口在 2 秒内未稳定，无法做 bounds 断言');
+  return previous;
+}
+
+async function hideMainWindow(electronApp) {
+  const hidden = await electronApp.evaluate(({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows().find(entry => entry.getTitle() === '截止线');
+    if (!win) return false;
+    win.hide();
+    return true;
+  });
+  assert(hidden, '未找到主窗口，无法验证隐藏入口');
+}
+
+async function mainWindowVisible(electronApp) {
+  return electronApp.evaluate(({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows().find(entry => entry.getTitle() === '截止线');
+    return win ? win.isVisible() : false;
+  });
+}
+
+async function assertWidgetJump(electronApp, widgetPage, mainPage, title, pageId) {
+  await hideMainWindow(electronApp);
+  await widgetPage.locator('#widgetRows .todo-row', { hasText: title }).click();
+  await mainPage.waitForFunction(({ title, pageId }) => {
+    const modal = document.querySelector('#itemDetailModal');
+    return modal?.getAttribute('aria-hidden') === 'false'
+      && document.querySelector('#detailTitle')?.textContent.trim() === title
+      && document.querySelector(`.nav-item[data-page="${pageId}"]`)?.classList.contains('active');
+  }, { title, pageId }, { timeout: 15000, polling: 100 });
+
+  assert(await mainWindowVisible(electronApp), '跳转后主窗口未显示');
+  assert(await mainPage.locator('#searchInput').inputValue() === '', '跳转后搜索未清空');
+  assert(await mainPage.locator('#detailBackButton').evaluate(el => el.classList.contains('hidden')), '小组件来源应隐藏返回键');
+  if (pageId === 'activities') {
+    assert(await mainPage.locator('#activityFilters [data-filter="all"]').getAttribute('aria-pressed') === 'true', '活动筛选未重置为全部');
+  }
+
+  await mainPage.locator('#itemDetailModal .detail-close').click();
+  await mainPage.waitForFunction(
+    () => document.querySelector('#itemDetailModal')?.getAttribute('aria-hidden') === 'true',
+    null, { timeout: 5000, polling: 100 }
+  );
+}
+
 async function dragWidgetBy(widgetPage, dx, dy) {
   // 直接派发带屏幕坐标的合成 PointerEvent：CDP 鼠标事件的 screenX 由窗口当前位置换算，
   // 窗口移动时坐标会漂移；真鼠标拖动的抖动回归正是这个坐标系差异造成的
@@ -93,11 +152,118 @@ async function dragWidgetBy(widgetPage, dx, dy) {
     assert(after.chip === '3 天后', `标签不正确：${after.chip}`);
     assert(after.pinPressed === 'false', '默认应为不置顶');
 
+    // 小组件点击事项：主窗口显示、落到大作业页并打开详情，搜索与筛选复位
+    await mainPage.locator('.nav-item[data-page="assignments"]').click();
+    await mainPage.locator('#assignmentFilters [data-filter="not_started"]').click();
+    await mainPage.locator('#searchInput').fill('不存在的关键词');
+    await hideMainWindow(electronApp);
+    const boundsBefore = await waitStableWidgetBounds(electronApp);
+    assert(boundsBefore, '跳转前未找到小组件窗口');
+
+    await widgetPage.locator('#widgetRows .todo-row').first().click();
+    await mainPage.waitForFunction(() => {
+      const modal = document.querySelector('#itemDetailModal');
+      return modal?.getAttribute('aria-hidden') === 'false'
+        && document.querySelector('#detailTitle')?.textContent.trim() === '探针测试事项';
+    }, null, { timeout: 15000, polling: 100 });
+
+    assert(await mainWindowVisible(electronApp), '跳转后主窗口未显示');
+    assert(await mainPage.locator('#detailTitle').textContent() === '探针测试事项', '详情标题不正确');
+    assert(await mainPage.locator('#detailBackButton').evaluate(el => el.classList.contains('hidden')), '小组件来源应隐藏返回键');
+    assert(await mainPage.locator('.nav-item[data-page="assignments"]').evaluate(el => el.classList.contains('active')), '未落在大作业页');
+    assert(await mainPage.locator('#searchInput').inputValue() === '', '跳转后搜索未清空');
+    assert(await mainPage.locator('#assignmentFilters [data-filter="all"]').getAttribute('aria-pressed') === 'true', '大作业筛选未重置为全部');
+
+    const boundsAfter = await waitStableWidgetBounds(electronApp);
+    assert(boundsAfter, '跳转后未找到小组件窗口');
+    assert(Math.abs(boundsAfter.x - boundsBefore.x) <= 2
+      && Math.abs(boundsAfter.y - boundsBefore.y) <= 2
+      && Math.abs(boundsAfter.width - boundsBefore.width) <= 2
+      && Math.abs(boundsAfter.height - boundsBefore.height) <= 2,
+      `小组件 bounds 在跳转后发生变化：${JSON.stringify({ boundsBefore, boundsAfter })}`);
+
+    // 详情内直接改状态：未开始 → 进行中
+    assert(await mainPage.locator('#detailFooter [data-action="edit"]').count() === 1, '详情内应有编辑入口');
+    assert(await mainPage.locator('#detailFooter [data-action="status"]').count() === 0, '底部不应再有状态切换按钮');
+    assert(await mainPage.locator('#detailStatusSelect').count() === 1, '详情状态字段应可直接修改');
+    assert(await mainPage.locator('#detailStatusSelect option').count() === 3, '大作业应有三个状态选项');
+    await mainPage.screenshot({ path: path.join(outputDir, 'widget-detail.png'), fullPage: true });
+    await mainPage.locator('#detailStatusSelect').selectOption('in_progress');
+    await mainPage.waitForFunction(() => {
+      const select = document.querySelector('#detailStatusSelect');
+      return select?.value === 'in_progress'
+        && document.querySelector('#itemDetailBody')?.textContent.includes('进行中');
+    }, null, { timeout: 8000 });
+
+    // 详情内改内容：复用编辑表单，保存后详情与小组件同步
+    await mainPage.locator('#detailFooter [data-action="edit"]').click();
+    await mainPage.locator('#itemModal.open').waitFor();
+    assert(await mainPage.locator('#itemTitle').inputValue() === '探针测试事项', '编辑表单未带入原内容');
+    await mainPage.locator('#itemTitle').fill('探针测试事项（已编辑）');
+    await mainPage.locator('#saveItemButton').click();
+    await mainPage.locator('#itemModal').waitFor({ state: 'hidden' });
+    await mainPage.waitForFunction(() => document.querySelector('#detailTitle')?.textContent === '探针测试事项（已编辑）', null, { timeout: 8000 });
+    assert(await mainPage.locator('#detailStatusSelect').inputValue() === 'in_progress', '编辑后状态字段未保持最新值');
+    await widgetPage.waitForFunction(() => document.querySelector('#widgetRows .todo-row b')?.textContent === '探针测试事项（已编辑）', null, { timeout: 8000 });
+
+    await mainPage.locator('#itemDetailModal .detail-close').click();
+    await mainPage.waitForFunction(
+      () => document.querySelector('#itemDetailModal')?.getAttribute('aria-hidden') === 'true',
+      null, { timeout: 5000, polling: 100 }
+    );
+    await mainPage.locator('.nav-item[data-page="today"]').click();
+    await mainPage.locator('[data-page-view="today"]').waitFor({ state: 'visible' });
+
     // 主窗口今天页删除该事项，小组件角标应实时归零；主窗口今天列表同时落到空态
     await mainPage.locator('#deadlineList [data-action="delete"]').first().click();
     await mainPage.locator('#confirmAccept').click();
     await widgetPage.waitForFunction(() => document.querySelector('#tabDeadlinesBadge')?.textContent === '0', null, { timeout: 8000 });
     await mainPage.locator('#deadlineList .empty-state').waitFor({ timeout: 8000 });
+
+    // 逾期 / 活动夹具：验证非大作业分支的落点
+    // 今天页空态按钮固定创建大作业
+    await mainPage.getByRole('button', { name: '新增事项' }).click();
+    await mainPage.locator('#itemTitle').fill('探针逾期事项');
+    await mainPage.locator('#itemDeadlineDate').fill(dateInDays(-1).slice(0, 10));
+    await mainPage.locator('#itemDeadlineTime').fill(dateInDays(-1).slice(11));
+    await mainPage.locator('#saveItemButton').click();
+    await mainPage.locator('#itemModal').waitFor({ state: 'hidden' });
+
+    // 活动必须从活动页「新增活动」入口创建
+    await mainPage.locator('.nav-item[data-page="activities"]').click();
+    await mainPage.locator('.new-kind-button[data-kind="activity"]').click();
+    await mainPage.locator('#itemTitle').fill('探针活动事项');
+    await mainPage.locator('#itemDeadlineDate').fill(dateInDays(3).slice(0, 10));
+    await mainPage.locator('#itemDeadlineTime').fill(dateInDays(3).slice(11));
+    await mainPage.locator('#saveItemButton').click();
+    await mainPage.locator('#itemModal').waitFor({ state: 'hidden' });
+
+    await widgetPage.waitForFunction(() => {
+      const rows = [...document.querySelectorAll('#widgetRows .todo-row')];
+      return rows.some(row => row.textContent.includes('探针逾期事项'))
+        && rows.some(row => row.textContent.includes('探针活动事项'));
+    }, null, { timeout: 8000 });
+
+    await assertWidgetJump(electronApp, widgetPage, mainPage, '探针逾期事项', 'overdue');
+    await assertWidgetJump(electronApp, widgetPage, mainPage, '探针活动事项', 'activities');
+
+    // 当天待办 → 详情 → 返回：确认详情来源切换与 aria-hidden 配对未回归
+    await mainPage.locator('.nav-item[data-page="today"]').click();
+    await mainPage.locator('#weekStrip .week-day.has-item').first().waitFor({ timeout: 8000 });
+    await mainPage.locator('#weekStrip .week-day.has-item').first().click();
+    await mainPage.locator('#dayItemsModal.open').waitFor();
+    await mainPage.locator('#dayItemsList .day-item-button').first().click();
+    await mainPage.waitForFunction(
+      () => document.querySelector('#itemDetailModal')?.getAttribute('aria-hidden') === 'false',
+      null, { timeout: 5000, polling: 100 }
+    );
+    assert(await mainPage.locator('#detailBackButton').evaluate(el => !el.classList.contains('hidden')), '当天待办来源应显示返回键');
+    await mainPage.locator('#detailBackButton').click();
+    await mainPage.waitForFunction(() => {
+      const modal = document.querySelector('#dayItemsModal');
+      return modal?.classList.contains('open') && modal?.getAttribute('aria-hidden') === 'false';
+    }, null, { timeout: 5000, polling: 100 });
+    await mainPage.locator('#dayItemsModal .day-items-close').click();
 
     // tab 切换：视图互斥 + 打卡空态入口
     await widgetPage.locator('#tabHabits').click();
@@ -154,7 +320,7 @@ async function dragWidgetBy(widgetPage, dx, dy) {
     await electronApp.evaluate(({ app }) => app.exit(0)).catch(() => {});
     await electronApp.close().catch(() => {});
   }
-  console.log(JSON.stringify({ passed: true, checks: ['启动自动显示与默认 tab', '空状态与角标隐藏', '数据实时推送与角标/标题/相对天数', 'tab 切换互斥', '页头拖动窗口', '滚动后仍可拖动', 'tab 记忆与默认恢复', '无渲染错误'] }));
+  console.log(JSON.stringify({ passed: true, checks: ['启动自动显示与默认 tab', '空状态与角标隐藏', '数据实时推送与角标/标题/相对天数', '小组件点击大作业打开详情并复位搜索/筛选', '详情内状态切换与编辑内容', '小组件点击逾期/活动落到对应页', '当天待办详情返回键未回归', 'tab 切换互斥', '页头拖动窗口', '滚动后仍可拖动', 'tab 记忆与默认恢复', '无渲染错误'] }));
 })().catch(error => {
   console.error(error.stack || error.message);
   process.exitCode = 1;

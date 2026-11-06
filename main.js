@@ -13,6 +13,8 @@ if (process.env.DEADLINE_DESK_DATA_DIR) {
 }
 
 let mainWindow;
+let mainReady = false;
+let pendingOpenItemId = null;
 let widgetWindow;
 let tray;
 let database;
@@ -208,6 +210,19 @@ function createWindow() {
     }
   });
 
+  mainReady = false;
+  // 主窗口当前只创建一次；若未来支持重建，丢弃旧窗口遗留的待投递请求
+  pendingOpenItemId = null;
+  mainWindow.webContents.on('did-start-loading', () => { mainReady = false; });
+  mainWindow.webContents.on('did-finish-load', () => {
+    mainReady = true;
+    if (pendingOpenItemId != null && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('items:open-request', pendingOpenItemId);
+      pendingOpenItemId = null;
+    }
+  });
+  // 加载失败不重试，也不把旧请求留到下一次重载
+  mainWindow.webContents.on('did-fail-load', () => { pendingOpenItemId = null; });
   mainWindow.loadFile(path.join(__dirname, 'src', 'index.html'));
   mainWindow.once('ready-to-show', () => mainWindow.show());
   mainWindow.on('close', event => {
@@ -344,6 +359,7 @@ function createTray() {
 
 function showMainWindow() {
   if (!mainWindow) createWindow();
+  if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
 }
@@ -417,6 +433,21 @@ function endWidgetDragSession(save) {
 function registerWidgetHandlers() {
   ipcMain.handle('widget:get', () => buildWidgetSnapshot());
   ipcMain.handle('widget:open-main', () => showMainWindow());
+  ipcMain.handle('widget:open-item', (event, id) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    // 与 resize / set-pinned 同款来源校验：主窗口共用 preload，不能借用该通道
+    if (!win || win.isDestroyed() || win !== widgetWindow) return false;
+    const itemId = Number(id);
+    if (!Number.isSafeInteger(itemId) || itemId <= 0) return false;
+    showMainWindow();
+    if (mainReady && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('items:open-request', itemId);
+    } else {
+      // 应用启动极短窗口内主窗口尚未加载完成：只保留最后一次请求
+      pendingOpenItemId = itemId;
+    }
+    return true;
+  });
   ipcMain.handle('widget:resize', (event, height) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     // 仅小组件窗口可用：主窗口与小组件共用 preload，防止主界面误调把主窗口改小
