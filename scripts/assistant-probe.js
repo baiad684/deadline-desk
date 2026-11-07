@@ -75,7 +75,11 @@ const CHECK_TITLES = {
   47: '设置页：明文 Key 不泄露、不写 localStorage',
   48: '备份：导出 zip 剔除 Key、保留地址/模型与 manifest',
   49: '恢复：备份 Key 被忽略、本机 Key 回填且清空数据后保留',
-  50: '恢复：本机无 Key 时不引入备份 Key 且不落盘'
+  50: '恢复：本机无 Key 时不引入备份 Key 且不落盘',
+  51: '重启后助手会话为空、输入不残留',
+  52: '多意图与越界意图：只读提示、无执行入口、零写入',
+  53: '疑似重复强制勾选与过期候选写入',
+  54: '批量删除：目标已不存在时其余行继续执行'
 };
 
 const passed = new Set();
@@ -340,6 +344,22 @@ function createMockServer() {
           return sendJson(res, 200, chatCompletion(JSON.stringify({
             intent: 'cleanup',
             cleanup: { range: { type: 'next_month' } }
+          })));
+        case 'MOCK_UI_DUPLICATE':
+          return sendJson(res, 200, chatCompletion(JSON.stringify({
+            intent: 'create',
+            create: {
+              candidates: [
+                { title: '数据库课设', kind: 'assignment', deadline: `${localDate(3)} 23:59`, status: 'not_started', workType: 'personal' },
+                { title: '补录旧通知', kind: 'assignment', deadline: `${localDate(-3)} 02:00`, status: 'not_started', workType: 'personal' }
+              ],
+              ignored: []
+            }
+          })));
+        case 'MOCK_UI_DELETE_PARTIAL':
+          return sendJson(res, 200, chatCompletion(JSON.stringify({
+            intent: 'delete',
+            delete: { targetIds: [6, 7] }
           })));
         case 'MOCK_UI_DELAYED':
           return sendJson(res, 200, chatCompletion(JSON.stringify({
@@ -1704,12 +1724,123 @@ async function runStageF(electronApp, mock, pageErrors) {
   assert(mock.requests.length === 2, `确认替换后应重新请求，实际 ${mock.requests.length}`);
   assert(restoredTitle41 === originalTitle41, `替换后标题应恢复为模型原值：${restoredTitle41}`);
   passCheck(41);
+
+  await resetAssistant(page);
+  const itemsBefore52 = await snapshotItems(page);
+  await assistantInput(page, 'MOCK_MULTI');
+  await submitAssistant(page);
+  await waitAssistant(page, '.assistant-summary');
+  const clarify52 = await page.evaluate(() => ({
+    text: document.querySelector('.assistant-summary')?.innerText.trim() || '',
+    actions: document.querySelectorAll('#assistantResult [data-assistant-action]').length,
+    records: document.querySelectorAll('.assistant-record').length,
+    input: document.querySelector('#assistantInput').value
+  }));
+  assert(clarify52.text.includes('请拆开分别提交'), `多意图提示不正确：${clarify52.text}`);
+  assert(clarify52.actions === 0, `多意图不应渲染执行入口，实际 ${clarify52.actions}`);
+  assert(clarify52.records === 0, `多意图不应产生操作记录，实际 ${clarify52.records}`);
+  assert(clarify52.input === 'MOCK_MULTI', `多意图后输入应保留，实际 ${clarify52.input}`);
+  assert(await snapshotItems(page) === itemsBefore52, '多意图不应写入事项');
+
+  await resetAssistant(page);
+  await assistantInput(page, 'MOCK_UNSUPPORTED');
+  await submitAssistant(page);
+  await waitAssistant(page, '.assistant-summary');
+  const unsupported52 = await page.evaluate(() => ({
+    text: document.querySelector('.assistant-summary')?.innerText.trim() || '',
+    actions: document.querySelectorAll('#assistantResult [data-assistant-action]').length,
+    records: document.querySelectorAll('.assistant-record').length,
+    input: document.querySelector('#assistantInput').value
+  }));
+  assert(unsupported52.text.includes('不支持生成周报。'), `越界意图提示不正确：${unsupported52.text}`);
+  assert(unsupported52.actions === 0, `越界意图不应渲染执行入口，实际 ${unsupported52.actions}`);
+  assert(unsupported52.records === 0, `越界意图不应产生操作记录，实际 ${unsupported52.records}`);
+  assert(unsupported52.input === 'MOCK_UNSUPPORTED', `越界意图后输入应保留，实际 ${unsupported52.input}`);
+  assert(await snapshotItems(page) === itemsBefore52, '越界意图不应写入事项');
+  passCheck(52);
+
+  await resetAssistant(page);
+  const itemsBefore53 = await itemsOf(page);
+  await assistantInput(page, 'MOCK_UI_DUPLICATE');
+  await submitAssistant(page);
+  await waitAssistant(page, '[data-row-id="c0"]');
+  const duplicate53 = await page.evaluate(() => {
+    const first = document.querySelector('[data-row-id="c0"]');
+    const second = document.querySelector('[data-row-id="c1"]');
+    return {
+      duplicate: Boolean(first.querySelector('.assistant-badge.duplicate')),
+      checked: first.querySelector('input[data-assistant-field="selected"]').checked,
+      disabled: first.querySelector('input[data-assistant-field="selected"]').disabled,
+      secondChecked: second.querySelector('input[data-assistant-field="selected"]').checked,
+      secondExpired: Boolean(second.querySelector('.assistant-badge.expired'))
+    };
+  });
+  assert(duplicate53.duplicate === true, 'c0 应标记「疑似重复」');
+  assert(duplicate53.checked === false, 'c0 疑似重复应默认不勾选');
+  assert(duplicate53.disabled === false, 'c0 疑似重复应允许用户坚持勾选');
+  assert(duplicate53.secondChecked === true && duplicate53.secondExpired === true, `c1 应已过期且默认勾选：${JSON.stringify(duplicate53)}`);
+
+  await page.click('[data-row-id="c0"] input[data-assistant-field="selected"]');
+  await waitAssistantText(page, '[data-assistant-action="write-create"]', '写入 2 条');
+  await page.click('[data-assistant-action="write-create"]');
+  await waitAssistantRecordCount(page, 1);
+  const items53 = await itemsOf(page);
+  assert(items53.length === itemsBefore53.length + 2, `应新增 2 条，实际 ${items53.length - itemsBefore53.length}`);
+  const duplicateCreated53 = items53.find(item => item.title === '数据库课设');
+  assert(Boolean(duplicateCreated53) && duplicateCreated53.deadline === `${localDate(3)} 23:59`, `疑似重复项应被写入且截止时间正确：${JSON.stringify(duplicateCreated53)}`);
+  const expiredCreated53 = items53.find(item => item.title === '补录旧通知');
+  assert(Boolean(expiredCreated53) && expiredCreated53.deadline === `${localDate(-3)} 02:00`, `过期候选应可写入：${JSON.stringify(expiredCreated53)}`);
+  const record53 = await page.innerText('#assistantRecords');
+  assert(record53.includes('已新增「数据库课设」'), `记录缺少疑似重复项新增明细：${record53}`);
+  assert(record53.includes('新增 2 条（成功 2，失败 0）'), `记录缺少新增汇总：${record53}`);
+  passCheck(53);
+
+  await resetAssistant(page);
+  await assistantInput(page, 'MOCK_UI_DELETE_PARTIAL');
+  await submitAssistant(page);
+  await waitAssistant(page, '[data-target-id="6"]');
+  const targets54 = await page.evaluate(() => [...document.querySelectorAll('#assistantResult .assistant-target-row')].map(row => ({
+    id: Number(row.dataset.targetId),
+    checked: row.querySelector('input[data-assistant-field="selected"]').checked
+  })));
+  assert(targets54.map(target => target.id).join(',') === '6,7', `删除目标顺序不正确：${targets54.map(target => target.id).join(',')}`);
+  assert(targets54.every(target => target.checked === true), `标题唯一的删除目标应默认全选：${JSON.stringify(targets54)}`);
+  const deleteButtonText54 = await page.innerText('[data-assistant-action="delete"]');
+  assert(deleteButtonText54 === '删除 2 条', `删除按钮文案不正确：${deleteButtonText54}`);
+
+  await page.evaluate(() => window.deadlineDesk.items.remove(6));
+  const recordsBefore54 = await page.evaluate(() => document.querySelectorAll('.assistant-record').length);
+  await page.click('[data-assistant-action="delete"]');
+  await waitAssistant(page, '#confirmModal.open');
+  await page.click('#confirmAccept');
+  await waitAssistantRecordCount(page, recordsBefore54 + 1);
+  const items54 = await itemsOf(page);
+  assert(!items54.some(item => item.id === 6), '确认前已删除的 id 6 不应复活');
+  assert(!items54.some(item => item.id === 7), '其余已勾选且仍存在的 id 7 应继续删除');
+  assert(items54.some(item => item.id === 3) && items54.some(item => item.id === 4), '未勾选事项不应受影响');
+  const record54 = await page.innerText('#assistantRecords');
+  assert(record54.includes('「上月未完成作业」已不存在（跳过）'), `记录缺少已不存在跳过明细：${record54}`);
+  assert(record54.includes('删除 2 条（成功 1，跳过 1，失败 0）'), `记录缺少批量删除汇总：${record54}`);
+  passCheck(54);
+
   await page.click('.nav-item[data-page="settings"]');
 }
 
 async function runStageG(electronApp, mock, pageErrors) {
   const page = await openStagePage(electronApp, pageErrors);
   await mock.resetMock();
+  await page.click('.nav-item[data-page="assistant"]');
+  await waitAssistantConfig(page, 'ready');
+  await waitAssistantText(page, '#assistantResult', '提交后会在这里显示预览或答复。');
+  const restarted51 = await page.evaluate(() => ({
+    input: document.querySelector('#assistantInput').value,
+    records: document.querySelectorAll('.assistant-record').length,
+    placeholder: document.querySelector('#assistantResult').innerText.includes('提交后会在这里显示预览或答复。')
+  }));
+  assert(restarted51.input === '', `重启后输入不应残留，实际 ${restarted51.input}`);
+  assert(restarted51.records === 0, `重启后不应保留操作记录，实际 ${restarted51.records}`);
+  assert(restarted51.placeholder === true, `重启后结果区应只显示占位：${JSON.stringify(restarted51)}`);
+  passCheck(51);
   await page.click('.nav-item[data-page="settings"]');
   await waitSettingsReady(page);
 
@@ -2089,7 +2220,7 @@ async function runStageH2(electronApp, mock, pageErrors) {
       .filter(key => passed.has(key))
       .sort((a, b) => Number(a) - Number(b))
       .map(key => `${key}. ${CHECK_TITLES[key]}`);
-    assert(checks.length === 50, `断言数量应为 50，实际 ${checks.length}`);
+    assert(checks.length === 54, `断言数量应为 54，实际 ${checks.length}`);
     console.log(JSON.stringify({ passed: true, checks }));
   } finally {
     if (electronApp) await stopApp(electronApp);
