@@ -293,6 +293,16 @@ kbd { padding: 2px 5px; border: 1px solid var(--line-300); border-bottom-width: 
 .danger-zone { background: #fdf7f5; }
 .danger-zone strong { color: var(--danger); }
 
+.ai-settings-form { display: grid; gap: 14px; padding: 16px 17px 0; }
+.ai-key-row { display: flex; align-items: flex-end; gap: 10px; }
+.ai-key-display { flex: 1; min-width: 0; }
+.ai-key-display span { display: block; margin-bottom: 6px; color: var(--ink-700); font-size: 12px; font-weight: 600; }
+.ai-key-display strong { display: block; min-width: 0; font-size: 13px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-settings-status { margin: 12px 17px 0; padding: 9px 11px; border-radius: var(--radius-md); font-size: 12px; line-height: 1.5; }
+.ai-settings-status[data-ai-status="ready"] { color: var(--success); background: var(--success-soft); }
+.ai-settings-status[data-ai-status="missing"] { color: var(--warning); background: var(--warning-soft); }
+.ai-settings-actions { display: flex; justify-content: flex-end; padding: 12px 17px 16px; }
+
 .diary-layout { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 16px; align-items: start; }
 .diary-calendar-panel, .diary-editor-panel { overflow: hidden; }
 .diary-month-actions { display: flex; align-items: center; gap: 6px; }
@@ -562,4 +572,84 @@ kbd { padding: 2px 5px; border: 1px solid var(--line-300); border-bottom-width: 
   /* 仅五列的大作业表在窄窗口下隐藏「类型」列；活动表和逾期表保持四列完整展示 */
   .table-head:not(.activity):not(.overdue) > span:nth-child(2),
   .table-row:not(.activity):not(.overdue) > :nth-child(2) { display: none; }
+}
+
+/* ---------- 助手 ---------- */
+.assistant-layout { width: min(980px, 100%); display: grid; gap: 16px; }
+.assistant-composer { padding: 16px 17px; display: flex; flex-direction: column; gap: 14px; }
+.assistant-input-field textarea { min-height: 108px; }
+.assistant-config-warning { display: flex; align-items: flex-start; gap: 10px; padding: 11px 12px; border-radius: var(--radius-md); color: var(--warning); background: var(--warning-soft); }
+.assistant-config-warning > span { display: grid; place-items: center; }
+.assistant-config-warning div { min-width: 0; }
+.assistant-config-warning strong { font-size: 13px; }
+.assistant-config-warning p { margin: 3px 0 0; font-size: 12px; line-height: 1.55; }
+.assistant-config-warning button { margin-left: auto; }
+.assistant-meta { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.assistant-counter { color: var(--ink-500); font-size: 12px; font-variant-numeric: tabular-nums; }
+.assistant-counter.over { color: var(--danger); }
+.assistant-privacy { max-width: 640px; margin: 0; color: var(--ink-400); font-size: 12px; line-height: 1.55; }
+.assistant-actions { display: flex; gap: 9px; }
+.assistant-result { min-height: 180px; padding: 16px 17px; }
+.assistant-placeholder, .assistant-empty, .assistant-hint { color: var(--ink-400); font-size: 13px; }
+.assistant-hint { margin: 8px 0 0; }
+.assistant-error { padding: 12px 14px; border-radius: var(--radius-md); color: var(--danger); background: var(--danger-soft); }
+.assistant-error strong { font-size: 13px; }
+.assistant-error p { margin: 4px 0 0; font-size: 13px; line-height: 1.55; }
+.assistant-error button { margin-top: 10px; }
+.assistant-summary { margin: 0 0 10px; color: var(--ink-700); font-size: 13px; white-space: pre-wrap; }
+.assistant-omitted { margin: 0 0 10px; padding: 8px 10px; border-radius: var(--radius-md); color: var(--warning); background: var(--warning-soft); font-size: 12px; }
+.assistant-ignored { margin-bottom: 12px; padding: 9px 11px; border-radius: var(--radius-md); background: var(--surface-2); }
+.assistant-ignored-item { display: grid; grid-template-columns: 1fr auto; gap: 8px; font-size: 12px; }
+.assistant-ignored-item em { color: var(--ink-400); font-style: normal; }
+.assistant-rows { display: grid; gap: 10px; }
+.assistant-row { padding: 12px; border: 1px solid var(--line-200); border-radius: var(--radius-lg); background: var(--surface-2); }
+.assistant-row-head { display: flex; align-items: center; gap: 9px; margin-bottom: 10px; }
+.assistant-row-title { min-width: 0; flex: 1; font-size: 13px; overflow-wrap: anywhere; }
+.assistant-badges { display: flex; flex-wrap: wrap; gap: 5px; }
+.assistant-badge { display: inline-flex; align-items: center; min-height: 22px; padding: 2px 7px; border-radius: var(--radius); font-size: 11px; font-weight: 600; white-space: nowrap; }
+.assistant-badge.duplicate { color: var(--violet); background: var(--violet-soft); }
+.assistant-badge.missing { color: var(--warning); background: var(--warning-soft); }
+.assistant-badge.expired { color: var(--danger); background: var(--danger-soft); }
+.assistant-badge.status-invalid { color: var(--danger); background: var(--danger-soft); }
+.assistant-badge.status-adjusted { color: var(--primary-hover); background: var(--primary-100); }
+.assistant-badge.title-too-long { color: var(--warning); background: var(--warning-soft); }
+.assistant-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.assistant-fields .full { grid-column: 1 / -1; }
+.assistant-fields .field input, .assistant-fields .field select { height: 34px; }
+.assistant-fields .field textarea { min-height: 64px; }
+.assistant-danger-note { margin-bottom: 10px; padding: 9px 11px; border-radius: var(--radius-md); color: var(--danger); background: var(--danger-soft); font-size: 12px; }
+.assistant-target-row { display: flex; align-items: center; gap: 10px; }
+.assistant-check { width: 22px; display: grid; place-items: center; flex: 0 0 22px; }
+.assistant-check input { width: 16px; height: 16px; }
+.assistant-row-main { display: grid; gap: 2px; }
+.assistant-row-main strong { font-size: 13px; }
+.assistant-row-main span { color: var(--ink-500); font-size: 12px; }
+.assistant-range { margin: 0 0 10px; color: var(--ink-500); font-size: 12px; }
+.assistant-targets { display: grid; gap: 7px; margin-bottom: 12px; }
+.assistant-target-option { display: flex; align-items: flex-start; gap: 9px; padding: 8px 10px; border: 1px solid var(--line-200); border-radius: var(--radius-md); background: var(--surface); cursor: pointer; }
+.assistant-target-option:has(input:checked) { border-color: var(--primary-300); background: var(--primary-soft); }
+.assistant-diff { display: grid; gap: 8px; }
+.assistant-diff-row { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.2fr); align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line-100); }
+.assistant-old { color: var(--ink-500); font-size: 12px; overflow-wrap: anywhere; }
+.assistant-arrow { color: var(--ink-400); }
+.assistant-new { min-width: 0; display: flex; align-items: center; gap: 6px; }
+.assistant-new input, .assistant-new select, .assistant-new textarea { width: 100%; min-width: 0; padding: 0 8px; border: 1px solid var(--line-300); border-radius: var(--radius-md); color: var(--ink-900); background: var(--surface); }
+.assistant-new input, .assistant-new select { height: 34px; }
+.assistant-new textarea { min-height: 64px; padding: 7px 8px; resize: vertical; }
+.assistant-footer { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 12px; }
+.assistant-reason { margin-right: auto; color: var(--warning); font-size: 12px; }
+.assistant-answer { margin: 0 0 10px; white-space: pre-wrap; }
+.assistant-fallback { margin: 0 0 10px; padding: 8px 10px; border-radius: var(--radius-md); color: var(--warning); background: var(--warning-soft); font-size: 12px; }
+.assistant-query-meta, .assistant-query-counts { margin: 6px 0 0; color: var(--ink-500); font-size: 12px; }
+.assistant-query-entries { display: grid; gap: 4px; margin-top: 8px; }
+.assistant-query-entry { color: var(--ink-600); font-size: 12px; }
+.assistant-records { display: grid; gap: 10px; }
+.assistant-record { padding: 10px 12px; border: 1px solid var(--line-200); border-radius: var(--radius-lg); background: var(--surface); }
+.assistant-record header { display: flex; align-items: baseline; gap: 10px; }
+.assistant-record header strong { color: var(--ink-700); font-size: 12px; }
+.assistant-record header span { color: var(--ink-600); font-size: 12px; }
+.assistant-record ul { margin: 6px 0 0; padding-left: 18px; color: var(--ink-600); font-size: 12px; }
+
+@media (max-width: 860px) {
+  .assistant-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

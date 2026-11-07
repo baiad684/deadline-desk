@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Notification, Tray, dialog, ipcMain, nativeImage, screen, shell } = require('electron');
+const { app, BrowserWindow, Menu, Notification, Tray, dialog, ipcMain, nativeImage, net, screen, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -23,6 +23,54 @@ let quitting = false;
 let notificationTimer;
 
 const APP_NAME = '截止线';
+
+const AI_SETTING_KEYS = { endpoint: 'ai_endpoint', model: 'ai_model', apiKey: 'ai_api_key' };
+const AI_INPUT_MAX_LENGTH = 3000;
+const AI_SUMMARY_LIMIT = 100;
+const AI_MODEL_MAX_LENGTH = 200;
+const AI_KEY_MAX_LENGTH = 4096;
+const AI_DEFAULT_TIMEOUT_MS = 60000;
+const AI_TIMEOUT_SENTINEL = Object.freeze({ assistantTimeout: true });
+const AI_INTENT_LABELS = { create: '新增', update: '修改', delete: '删除', cleanup: '清理已完成', query: '查询' };
+const AI_ALLOWED_INTENTS = ['create', 'update', 'delete', 'cleanup', 'query', 'unsupported'];
+const WEEKDAY_FULL = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+const WEEKDAY_SHORT = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+const AI_QUERY_KIND_LABELS = { assignment: '大作业', activity: '活动', all: '全部类型' };
+const AI_QUERY_STATUS_LABELS = { pending: '未完成', completed: '已完成', all: '全部状态' };
+const AI_ERROR_TABLE = {
+  not_configured: { message: '尚未完成 AI 配置，请到设置页填写接口地址、API Key 与模型名', retryable: false },
+  invalid_input: { message: '请输入要处理的内容', retryable: false },
+  invalid_endpoint: { message: '接口地址格式不正确，请在设置页填写完整的 http/https 地址', retryable: false },
+  http_400: { message: '接口地址或模型名不正确，或请求被服务端拒绝（400）', retryable: false },
+  http_401: { message: 'API Key 无效或没有访问权限（401/403）', retryable: false },
+  http_403: { message: 'API Key 无效或没有访问权限（401/403）', retryable: false },
+  http_404: { message: '接口地址或模型名不存在（404）', retryable: false },
+  http_429: { message: '请求过于频繁，请稍后再试（429）', retryable: true },
+  http_5xx: { message: '模型服务暂时不可用（5xx），请稍后重试', retryable: true },
+  network: { message: '无法连接模型服务，请检查网络、接口地址或系统代理', retryable: true },
+  timeout: { message: '请求超时（60 秒），请重试', retryable: true },
+  empty_response: { message: '模型没有返回内容，请重试', retryable: true },
+  invalid_response: { message: '模型返回内容无法解析，请重试；若持续失败，请确认接口与模型支持 Chat Completions', retryable: true },
+  forbidden: { message: '当前窗口无权执行该操作', retryable: false },
+  unknown: { message: '处理失败，请重试', retryable: true }
+};
+
+const AI_ASSIGNMENT_STATUSES = ['not_started', 'in_progress', 'completed'];
+const AI_ACTIVITY_STATUSES = ['not_completed', 'completed'];
+const AI_STATUS_BY_KIND = { assignment: AI_ASSIGNMENT_STATUSES, activity: AI_ACTIVITY_STATUSES };
+const AI_DEFAULT_STATUS_BY_KIND = { assignment: 'not_started', activity: 'not_completed' };
+const AI_DUPLICATE_TIME_WINDOW_MS = 60 * 60 * 1000;
+const AI_DUPLICATE_DICE_THRESHOLD = 0.75;
+const AI_CREATE_EMPTY_MESSAGE = '没有识别到可新增的事项。';
+const AI_UPDATE_NO_MATCH_MESSAGE = '没有找到匹配的事项。';
+const AI_UPDATE_KIND_MESSAGE = '助手不能修改事项类型，请到对应列表的编辑表单操作。';
+const AI_UPDATE_NO_CHANGES_MESSAGE = '请说明要修改的内容。';
+const AI_DELETE_NO_MATCH_MESSAGE = '没有找到匹配的事项。';
+const AI_CLEANUP_NO_RANGE_MESSAGE = '请补充清理范围（例如上个月、本月、今年、某个具体月份或全部已完成）。';
+const AI_CLEANUP_EMPTY_MESSAGE = '没有符合条件的已完成事项。';
+const AI_NOTE_MISSING_IDS = '未找到事项 id：';
+const AI_NOTE_OUT_OF_RANGE_IDS = '超出本次可操作范围的事项 id：';
+const AI_CREATE_IGNORED_REASONS = { kind: '事项类型无效', title: '缺少明确标题', shape: '候选格式无效' };
 
 function getPaths() {
   const root = process.env.DEADLINE_DESK_DATA_DIR || app.getPath('userData');
@@ -859,13 +907,28 @@ function createBackupArchive(destination) {
   return new Promise((resolve, reject) => {
     const paths = getPaths();
     database.persist();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deadline-desk-backup-'));
+    const tempDatabase = path.join(tempDir, 'deadline-desk.db');
+    const cleanup = () => fs.rmSync(tempDir, { recursive: true, force: true });
+    try {
+      const copy = new SQL.Database(fs.readFileSync(paths.database));
+      copy.run('PRAGMA secure_delete = ON');
+      copy.run(`DELETE FROM settings WHERE key = '${AI_SETTING_KEYS.apiKey}'`);
+      copy.run('VACUUM');
+      fs.writeFileSync(tempDatabase, Buffer.from(copy.export()));
+      copy.close();
+    } catch (error) {
+      cleanup();
+      reject(error);
+      return;
+    }
     const output = fs.createWriteStream(destination);
     const archive = archiver('zip', { zlib: { level: 9 } });
-    output.on('close', resolve);
-    output.on('error', reject);
-    archive.on('error', reject);
+    output.on('close', () => { cleanup(); resolve(); });
+    output.on('error', error => { cleanup(); reject(error); });
+    archive.on('error', error => { cleanup(); reject(error); });
     archive.pipe(output);
-    archive.file(paths.database, { name: 'deadline-desk.db' });
+    archive.file(tempDatabase, { name: 'deadline-desk.db' });
     archive.directory(paths.attachments, 'attachments');
     archive.append(JSON.stringify({ app: 'Deadline Desk', version: 1, createdAt: new Date().toISOString() }, null, 2), { name: 'manifest.json' });
     archive.finalize();
@@ -886,6 +949,8 @@ async function restoreBackupArchive(source) {
     verification.close();
     if (!table) throw new Error('备份数据库无效');
 
+    const localApiKey = readAiConfig().apiKey;
+
     const paths = getPaths();
     database.close();
     fs.copyFileSync(backupDatabase, paths.database);
@@ -894,10 +959,1010 @@ async function restoreBackupArchive(source) {
     const backupAttachments = path.join(tempDir, 'attachments');
     if (fs.existsSync(backupAttachments)) fs.cpSync(backupAttachments, paths.attachments, { recursive: true });
     await initializeDatabase();
+    database.prepare('DELETE FROM settings WHERE key = ?').run(AI_SETTING_KEYS.apiKey);
+    database.exec('VACUUM');
+    if (localApiKey) setSetting(AI_SETTING_KEYS.apiKey, localApiKey);
+    database.persist();
     notifyWidgets();
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
+}
+
+function readAiConfig() {
+  return {
+    endpoint: (getSetting(AI_SETTING_KEYS.endpoint) || '').trim(),
+    model: (getSetting(AI_SETTING_KEYS.model) || '').trim(),
+    apiKey: (getSetting(AI_SETTING_KEYS.apiKey) || '').trim()
+  };
+}
+
+function isValidAiEndpoint(value) {
+  try {
+    const text = String(value).trim();
+    if (!text) return false;
+    const parsed = new URL(text);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function maskApiKey(key) {
+  if (!key) return '';
+  if (key.length >= 12) return `${key.slice(0, 4)}••••${key.slice(-4)}`;
+  return '••••';
+}
+
+function buildAiSettingsView() {
+  const config = readAiConfig();
+  return {
+    configured: config.endpoint !== '' && config.model !== '' && config.apiKey !== '' && isValidAiEndpoint(config.endpoint),
+    endpoint: config.endpoint,
+    model: config.model,
+    keyMask: maskApiKey(config.apiKey)
+  };
+}
+
+function isMainWindowSender(event) {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  return Boolean(win && !win.isDestroyed() && win === mainWindow);
+}
+
+function readItemsForAssistant() {
+  return database.prepare('SELECT id, title, kind, deadline, status FROM items ORDER BY id ASC').all()
+    .map(row => ({ id: row.id, title: row.title, kind: row.kind, deadline: row.deadline, status: row.status }));
+}
+
+function parseLocalDateTime(deadline) {
+  const match = String(deadline).slice(0, 16).match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/);
+  if (!match) return NaN;
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), Number(match[4]), Number(match[5])).getTime();
+}
+
+function buildAssistantSummary(now, rows = readItemsForAssistant()) {
+  const nowValue = now.getTime();
+  const distanceOf = item => {
+    const distance = Math.abs(parseLocalDateTime(item.deadline) - nowValue);
+    return Number.isNaN(distance) ? Infinity : distance;
+  };
+  const byDistance = (a, b) => {
+    const left = distanceOf(a);
+    const right = distanceOf(b);
+    if (left !== right) return left - right;
+    return a.id - b.id;
+  };
+  const pending = rows.filter(item => item.status !== 'completed').sort(byDistance);
+  const completed = rows.filter(item => item.status === 'completed').sort(byDistance);
+  const ordered = pending.concat(completed);
+  return {
+    items: ordered.slice(0, AI_SUMMARY_LIMIT),
+    omittedCount: Math.max(0, rows.length - AI_SUMMARY_LIMIT)
+  };
+}
+
+class AssistantFailure extends Error {
+  constructor(code, message, retryable) {
+    super(message);
+    this.name = 'AssistantFailure';
+    this.code = code;
+    this.retryable = retryable;
+  }
+}
+
+function createHttpFailure(status) {
+  if (status >= 500 && status <= 599) {
+    const entry = AI_ERROR_TABLE.http_5xx;
+    return new AssistantFailure('http_5xx', entry.message, entry.retryable);
+  }
+  const entry = AI_ERROR_TABLE[`http_${status}`];
+  if (entry) return new AssistantFailure(`http_${status}`, entry.message, entry.retryable);
+  return new AssistantFailure('http_other', `请求失败（状态码 ${status}）`, true);
+}
+
+function resolveAiTimeoutMs() {
+  const configured = Number(process.env.DEADLINE_DESK_AI_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured > 0 ? configured : AI_DEFAULT_TIMEOUT_MS;
+}
+
+function classifyFetchFailure(error) {
+  if (error === AI_TIMEOUT_SENTINEL) return 'timeout';
+  if (error && typeof error === 'object' && error.assistantTimeout === true) return 'timeout';
+  if (error && typeof error === 'object' && error.name === 'AbortError') return 'timeout';
+  const text = [error?.message, error?.code, error?.cause?.message, error?.cause?.code, error?.cause?.errno]
+    .filter(value => value !== undefined && value !== null)
+    .join(' ');
+  if (/net::ERR_|ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ERR_SOCKET_/.test(text)) return 'network';
+  return 'unknown';
+}
+
+async function callChatCompletion(options) {
+  const timeoutMs = typeof options.timeoutMs === 'number' && options.timeoutMs > 0 ? options.timeoutMs : resolveAiTimeoutMs();
+  const controller = new AbortController();
+  const abortTimer = setTimeout(() => controller.abort(), timeoutMs);
+  let guardTimer;
+  const requestPromise = (async () => {
+    const response = await net.fetch(options.endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        Authorization: `Bearer ${options.apiKey}`
+      },
+      body: JSON.stringify({ model: options.model, temperature: 0, messages: options.messages }),
+      signal: controller.signal
+    });
+    const text = await response.text();
+    return { status: response.status, ok: response.ok, text };
+  })();
+  // 竞速结束后请求才失败时，避免 unhandledRejection
+  requestPromise.catch(() => {});
+  const guardPromise = new Promise((_resolve, reject) => {
+    guardTimer = setTimeout(() => reject(AI_TIMEOUT_SENTINEL), timeoutMs);
+  });
+  try {
+    return await Promise.race([requestPromise, guardPromise]);
+  } catch (error) {
+    const kind = classifyFetchFailure(error);
+    const entry = AI_ERROR_TABLE[kind];
+    throw new AssistantFailure(kind, entry.message, entry.retryable);
+  } finally {
+    clearTimeout(abortTimer);
+    clearTimeout(guardTimer);
+  }
+}
+
+function readChatText(chat) {
+  if (!chat.ok) throw createHttpFailure(chat.status);
+  let payload;
+  try {
+    payload = JSON.parse(chat.text);
+  } catch {
+    throw new AssistantFailure('invalid_response', AI_ERROR_TABLE.invalid_response.message, AI_ERROR_TABLE.invalid_response.retryable);
+  }
+  const choices = payload && typeof payload === 'object' ? payload.choices : null;
+  if (!Array.isArray(choices) || choices.length === 0) {
+    throw new AssistantFailure('invalid_response', AI_ERROR_TABLE.invalid_response.message, AI_ERROR_TABLE.invalid_response.retryable);
+  }
+  const choice = choices[0];
+  if (!choice || typeof choice !== 'object' || Array.isArray(choice)) {
+    throw new AssistantFailure('invalid_response', AI_ERROR_TABLE.invalid_response.message, AI_ERROR_TABLE.invalid_response.retryable);
+  }
+  const message = choice.message;
+  if (!message || typeof message !== 'object' || Array.isArray(message)) {
+    throw new AssistantFailure('invalid_response', AI_ERROR_TABLE.invalid_response.message, AI_ERROR_TABLE.invalid_response.retryable);
+  }
+  if (choice.finish_reason === 'length') {
+    throw new AssistantFailure('invalid_response', AI_ERROR_TABLE.invalid_response.message, AI_ERROR_TABLE.invalid_response.retryable);
+  }
+  const content = message.content;
+  let text = '';
+  if (typeof content === 'string') text = content;
+  else if (Array.isArray(content)) {
+    text = content
+      .filter(part => part && typeof part === 'object' && part.type === 'text' && typeof part.text === 'string')
+      .map(part => part.text)
+      .join('');
+  }
+  if (!text.trim()) throw new AssistantFailure('empty_response', AI_ERROR_TABLE.empty_response.message, AI_ERROR_TABLE.empty_response.retryable);
+  return text;
+}
+
+function extractJsonObject(text) {
+  const source = String(text).replace(/```[A-Za-z]*/g, '').trim();
+  const start = source.indexOf('{');
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  for (let index = start; index < source.length; index += 1) {
+    const char = source[index];
+    if (inString) {
+      if (char === '\\') {
+        index += 1;
+        continue;
+      }
+      if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === '{') depth += 1;
+    else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          const parsed = JSON.parse(source.slice(start, index + 1));
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+          return parsed;
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function readAssistantPayload(chat) {
+  const parsed = extractJsonObject(readChatText(chat));
+  if (!parsed) throw new AssistantFailure('invalid_response', AI_ERROR_TABLE.invalid_response.message, AI_ERROR_TABLE.invalid_response.retryable);
+  return parsed;
+}
+
+function buildMultiIntentMessage(categories) {
+  const labels = Object.keys(AI_INTENT_LABELS).filter(name => categories.includes(name)).map(name => AI_INTENT_LABELS[name]);
+  const suffix = '；一次只能处理一类，请拆开分别提交。';
+  if (labels.length === 0) return `识别到多类操作${suffix}`;
+  if (labels.length === 1) return `识别到「${labels[0]}」类操作${suffix}`;
+  if (labels.length === 2) return `识别到「${labels[0]}」和「${labels[1]}」两类操作${suffix}`;
+  const head = labels.slice(0, -1).map(label => `「${label}」`).join('、');
+  return `识别到${head}和「${labels[labels.length - 1]}」多类操作${suffix}`;
+}
+
+function normalizeAssistantIntent(payload) {
+  const intent = payload?.intent;
+  const rawDetected = Array.isArray(payload?.detectedIntents) ? payload.detectedIntents : [];
+  const detected = Array.from(new Set(rawDetected.filter(value => AI_ALLOWED_INTENTS.includes(value))));
+  const categories = detected.filter(value => value !== 'unsupported');
+  if (categories.length >= 2 || intent === 'multiple') {
+    return { intent: 'clarify', message: buildMultiIntentMessage(categories) };
+  }
+  if (!AI_ALLOWED_INTENTS.includes(intent)) {
+    return { intent: 'clarify', message: '没有理解这条指令，请换一种说法或补充信息。' };
+  }
+  if (intent === 'unsupported') {
+    const message = typeof payload.message === 'string' && payload.message.trim() ? payload.message : '暂不支持这类操作。';
+    return { intent: 'unsupported', message };
+  }
+  return { intent, message: typeof payload.message === 'string' ? payload.message : '' };
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function statusesForKind(kind) {
+  return Object.prototype.hasOwnProperty.call(AI_STATUS_BY_KIND, kind) ? AI_STATUS_BY_KIND[kind] : [];
+}
+
+function defaultStatusForKind(kind) {
+  const status = AI_DEFAULT_STATUS_BY_KIND[kind];
+  return typeof status === 'string' ? status : null;
+}
+
+function isStatusAllowed(kind, status) {
+  return statusesForKind(kind).includes(status);
+}
+
+function normalizeAssistantTitle(title) {
+  let text = String(title).normalize('NFKC').toLowerCase().replace(/\s|\p{P}|\p{S}/gu, '');
+  for (const prefix of ['关于', '报名', '参加']) {
+    if (text.startsWith(prefix)) {
+      text = text.slice(prefix.length);
+      break;
+    }
+  }
+  for (const suffix of ['课程设计', '课程报告', '实验报告', '大作业', '比赛', '报名', '活动', '作业', '课设', '报告']) {
+    if (text.endsWith(suffix)) {
+      text = text.slice(0, -suffix.length);
+      break;
+    }
+  }
+  return text;
+}
+
+function buildTitleBigrams(text) {
+  if (typeof text !== 'string' || text.length < 2) return [];
+  const bigrams = [];
+  for (let index = 0; index < text.length - 1; index += 1) bigrams.push(text.slice(index, index + 2));
+  return bigrams;
+}
+
+function diceCoefficient(leftBigrams, rightBigrams) {
+  const total = leftBigrams.length + rightBigrams.length;
+  if (total === 0) return 0;
+  const counts = new Map();
+  for (const gram of leftBigrams) counts.set(gram, (counts.get(gram) || 0) + 1);
+  let overlap = 0;
+  for (const gram of rightBigrams) {
+    const count = counts.get(gram);
+    if (count > 0) {
+      counts.set(gram, count - 1);
+      overlap += 1;
+    }
+  }
+  return (2 * overlap) / total;
+}
+
+function hasTitleSignal(leftTitle, rightTitle) {
+  const left = normalizeAssistantTitle(leftTitle);
+  const right = normalizeAssistantTitle(rightTitle);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  const shorter = left.length <= right.length ? left : right;
+  const longer = left.length <= right.length ? right : left;
+  if (shorter.length >= 3 && longer.includes(shorter)) return true;
+  if (left.length >= 3 && right.length >= 3
+    && diceCoefficient(buildTitleBigrams(left), buildTitleBigrams(right)) >= AI_DUPLICATE_DICE_THRESHOLD) return true;
+  return false;
+}
+
+function isDeadlineClose(leftDeadline, rightDeadline, windowMs) {
+  const left = parseLocalDateTime(leftDeadline);
+  const right = parseLocalDateTime(rightDeadline);
+  if (Number.isNaN(left) || Number.isNaN(right)) return false;
+  return Math.abs(left - right) <= windowMs;
+}
+
+function composePlanMessage(modelMessage, notes) {
+  const parts = [];
+  if (typeof modelMessage === 'string' && modelMessage.trim()) parts.push(modelMessage.trim());
+  for (const note of Array.isArray(notes) ? notes : []) {
+    if (typeof note === 'string' && note.trim()) parts.push(note.trim());
+  }
+  return parts.join('；');
+}
+
+function parseTargetIds(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const ids = [];
+  for (const item of value) {
+    if (typeof item !== 'number' && typeof item !== 'string') continue;
+    const number = Number(item);
+    if (!Number.isSafeInteger(number) || number <= 0) continue;
+    if (seen.has(number)) continue;
+    seen.add(number);
+    ids.push(number);
+  }
+  return ids;
+}
+
+function classifyTargetIds(targetIds, allItems, summaryItems) {
+  const allIds = new Set((Array.isArray(allItems) ? allItems : []).map(item => item.id));
+  const summaryIds = new Set((Array.isArray(summaryItems) ? summaryItems : []).map(item => item.id));
+  const missingIds = [];
+  const outOfRangeIds = [];
+  const resolvedIds = [];
+  for (const id of targetIds) {
+    if (!allIds.has(id)) missingIds.push(id);
+    else if (!summaryIds.has(id)) outOfRangeIds.push(id);
+    else resolvedIds.push(id);
+  }
+  return { missingIds, outOfRangeIds, resolvedIds };
+}
+
+function buildPlanNotes(missingIds, outOfRangeIds) {
+  const notes = [];
+  if (missingIds.length > 0) notes.push(AI_NOTE_MISSING_IDS + missingIds.join('、'));
+  if (outOfRangeIds.length > 0) notes.push(AI_NOTE_OUT_OF_RANGE_IDS + outOfRangeIds.join('、'));
+  return notes;
+}
+
+function collectPlanTargetIds(resolvedIds, allItems) {
+  const rows = Array.isArray(allItems) ? allItems : [];
+  const titles = new Set();
+  for (const id of resolvedIds) {
+    const row = rows.find(item => item.id === id);
+    if (row) titles.add(String(row.title).trim());
+  }
+  const extras = rows
+    .filter(row => !resolvedIds.includes(row.id) && titles.has(String(row.title).trim()))
+    .sort((a, b) => a.id - b.id)
+    .map(row => row.id);
+  return resolvedIds.concat(extras);
+}
+
+function isAmbiguousTitle(title, allItems) {
+  const normalized = String(title).trim();
+  const count = (Array.isArray(allItems) ? allItems : []).filter(item => String(item.title).trim() === normalized).length;
+  return count >= 2;
+}
+
+function detectDuplicateCandidate(candidate, items) {
+  const list = Array.isArray(items) ? items : [];
+  const title = typeof candidate?.title === 'string' ? candidate.title : '';
+  const deadlineMs = parseLocalDateTime(candidate?.deadline);
+  let best = null;
+  let bestRank = Infinity;
+  let bestDistance = Infinity;
+  for (const item of list) {
+    const titleHit = title !== '' && hasTitleSignal(title, item.title);
+    const timeHit = isDeadlineClose(candidate?.deadline, item.deadline, AI_DUPLICATE_TIME_WINDOW_MS);
+    if (!titleHit && !timeHit) continue;
+    const rank = titleHit ? 0 : 1;
+    const itemMs = parseLocalDateTime(item.deadline);
+    const distance = Number.isNaN(deadlineMs) || Number.isNaN(itemMs) ? Infinity : Math.abs(deadlineMs - itemMs);
+    const better = best === null
+      || rank < bestRank
+      || (rank === bestRank && distance < bestDistance)
+      || (rank === bestRank && distance === bestDistance && item.id < best.id);
+    if (better) {
+      best = item;
+      bestRank = rank;
+      bestDistance = distance;
+    }
+  }
+  return best ? { id: best.id, title: best.title, deadline: best.deadline } : null;
+}
+
+function normalizeCreatePlan(options) {
+  const { payload, allItems, now, omittedCount } = options;
+  const source = isPlainObject(payload?.create) ? payload.create : null;
+  const candidates = source && Array.isArray(source.candidates) ? source.candidates : [];
+  const modelIgnored = source && Array.isArray(source.ignored) ? source.ignored : [];
+  const ignored = [];
+  for (const entry of modelIgnored) {
+    if (!isPlainObject(entry)) continue;
+    if (typeof entry.reason !== 'string' || entry.reason.trim() === '') continue;
+    ignored.push({ text: typeof entry.text === 'string' ? entry.text.trim() : '', reason: entry.reason.trim() });
+  }
+  const normalized = [];
+  candidates.forEach((raw, index) => {
+    if (!isPlainObject(raw)) {
+      ignored.push({ text: '', reason: AI_CREATE_IGNORED_REASONS.shape });
+      return;
+    }
+    if (!['assignment', 'activity'].includes(raw.kind)) {
+      ignored.push({ text: typeof raw.title === 'string' ? raw.title.trim() : '', reason: AI_CREATE_IGNORED_REASONS.kind });
+      return;
+    }
+    if (typeof raw.title !== 'string' || raw.title.trim() === '') {
+      ignored.push({ text: '', reason: AI_CREATE_IGNORED_REASONS.title });
+      return;
+    }
+    const kind = raw.kind;
+    const title = raw.title.trim();
+    const titleTooLong = title.length > 120;
+    let deadline = null;
+    let deadlineIssue = null;
+    if (raw.deadline === null || raw.deadline === undefined
+      || (typeof raw.deadline === 'string' && raw.deadline.trim() === '')) {
+      deadlineIssue = 'missing';
+    } else if (typeof raw.deadline !== 'string') {
+      deadlineIssue = 'invalid';
+    } else {
+      try {
+        deadline = validateDeadline(raw.deadline.trim());
+      } catch {
+        deadline = null;
+        deadlineIssue = 'invalid';
+      }
+    }
+    let status = null;
+    let statusInvalid = false;
+    if (raw.status === null || raw.status === undefined
+      || (typeof raw.status === 'string' && raw.status.trim() === '')) {
+      status = defaultStatusForKind(kind);
+    } else if (typeof raw.status === 'string' && isStatusAllowed(kind, raw.status.trim())) {
+      status = raw.status.trim();
+    } else {
+      statusInvalid = true;
+    }
+    const workType = kind === 'assignment' ? (raw.workType === 'team' ? 'team' : 'personal') : null;
+    const description = typeof raw.description === 'string' ? raw.description.trim().slice(0, 10000) : '';
+    const expired = deadlineIssue === null && parseLocalDateTime(deadline) < now.getTime();
+    const duplicate = detectDuplicateCandidate({ title, deadline }, allItems);
+    const executable = !titleTooLong && deadlineIssue === null && status !== null && isStatusAllowed(kind, status);
+    const selected = executable && duplicate === null;
+    normalized.push({
+      rowId: `c${index}`,
+      title,
+      kind,
+      status,
+      description,
+      workType,
+      deadline,
+      deadlineIssue,
+      titleTooLong,
+      statusInvalid,
+      statusAdjusted: false,
+      expired,
+      duplicate,
+      selected,
+      executable
+    });
+  });
+  if (normalized.length === 0 && ignored.length === 0) {
+    return { ok: true, intent: 'clarify', message: AI_CREATE_EMPTY_MESSAGE, omittedCount };
+  }
+  return {
+    ok: true,
+    intent: 'create',
+    message: typeof payload?.message === 'string' ? payload.message : '',
+    omittedCount,
+    create: { candidates: normalized, ignored }
+  };
+}
+
+function normalizeUpdatePlan(options) {
+  const { payload, summaryItems, allItems, omittedCount } = options;
+  if (!isPlainObject(payload?.update)) {
+    return { ok: true, intent: 'clarify', message: AI_UPDATE_NO_MATCH_MESSAGE, omittedCount };
+  }
+  const targetIds = parseTargetIds(payload.update.targetIds);
+  if (targetIds.length === 0) {
+    return { ok: true, intent: 'clarify', message: AI_UPDATE_NO_MATCH_MESSAGE, omittedCount };
+  }
+  const { missingIds, outOfRangeIds, resolvedIds } = classifyTargetIds(targetIds, allItems, summaryItems);
+  if (resolvedIds.length === 0) {
+    return {
+      ok: true,
+      intent: 'clarify',
+      message: composePlanMessage(AI_UPDATE_NO_MATCH_MESSAGE, buildPlanNotes(missingIds, outOfRangeIds)),
+      omittedCount
+    };
+  }
+  const orderedIds = collectPlanTargetIds(resolvedIds, allItems);
+  const targets = orderedIds.map(id => {
+    const row = allItems.find(item => item.id === id);
+    return {
+      id: row.id,
+      title: row.title,
+      kind: row.kind,
+      deadline: row.deadline,
+      status: row.status,
+      isAmbiguous: isAmbiguousTitle(row.title, allItems)
+    };
+  });
+  const ambiguous = targets.length > 1 || targets.some(target => target.isAmbiguous);
+  const applyToId = targets.length === 1 ? targets[0].id : null;
+
+  const sourceChanges = isPlainObject(payload.update.changes) ? payload.update.changes : {};
+  const explicitKinds = resolvedIds.map(id => (allItems.find(item => item.id === id) || {}).kind);
+  if (typeof sourceChanges.kind === 'string' && !explicitKinds.every(kind => kind === sourceChanges.kind)) {
+    return { ok: true, intent: 'clarify', message: AI_UPDATE_KIND_MESSAGE, omittedCount };
+  }
+
+  const changes = {};
+  let statusInvalid = false;
+  let deadlineInvalid = false;
+  let titleTooLong = false;
+
+  const hasDeadline = !(sourceChanges.deadline === null || sourceChanges.deadline === undefined
+    || (typeof sourceChanges.deadline === 'string' && sourceChanges.deadline.trim() === ''));
+  if (hasDeadline) {
+    if (typeof sourceChanges.deadline === 'string') {
+      try {
+        changes.deadline = validateDeadline(sourceChanges.deadline.trim());
+      } catch {
+        changes.deadline = null;
+        deadlineInvalid = true;
+      }
+    } else {
+      changes.deadline = null;
+      deadlineInvalid = true;
+    }
+  }
+
+  const hasStatus = !(sourceChanges.status === null || sourceChanges.status === undefined
+    || (typeof sourceChanges.status === 'string' && sourceChanges.status.trim() === ''));
+  if (hasStatus) {
+    const status = typeof sourceChanges.status === 'string' ? sourceChanges.status.trim() : null;
+    if (status !== null && explicitKinds.every(kind => isStatusAllowed(kind, status))) {
+      changes.status = status;
+    } else {
+      changes.status = null;
+      statusInvalid = true;
+    }
+  }
+
+  if (typeof sourceChanges.title === 'string') {
+    const title = sourceChanges.title.trim();
+    if (title !== '') {
+      titleTooLong = title.length > 120;
+      changes.title = title;
+    }
+  }
+
+  if (typeof sourceChanges.description === 'string') {
+    changes.description = sourceChanges.description.trim().slice(0, 10000);
+  }
+
+  if (sourceChanges.workType === 'personal' || sourceChanges.workType === 'team') {
+    changes.workType = sourceChanges.workType;
+  }
+
+  if (Object.keys(changes).length === 0 && !statusInvalid && !deadlineInvalid) {
+    return { ok: true, intent: 'clarify', message: AI_UPDATE_NO_CHANGES_MESSAGE, omittedCount };
+  }
+
+  const message = composePlanMessage(payload.message, buildPlanNotes(missingIds, outOfRangeIds));
+  return {
+    ok: true,
+    intent: 'update',
+    message,
+    omittedCount,
+    update: {
+      targets,
+      ambiguous,
+      applyToId,
+      changes,
+      statusInvalid,
+      deadlineInvalid,
+      titleTooLong,
+      message
+    }
+  };
+}
+
+function normalizeDeletePlan(options) {
+  const { payload, summaryItems, allItems, omittedCount } = options;
+  if (!isPlainObject(payload?.delete)) {
+    return { ok: true, intent: 'clarify', message: AI_DELETE_NO_MATCH_MESSAGE, omittedCount };
+  }
+  const targetIds = parseTargetIds(payload.delete.targetIds);
+  if (targetIds.length === 0) {
+    return { ok: true, intent: 'clarify', message: AI_DELETE_NO_MATCH_MESSAGE, omittedCount };
+  }
+  const { missingIds, outOfRangeIds, resolvedIds } = classifyTargetIds(targetIds, allItems, summaryItems);
+  if (resolvedIds.length === 0) {
+    return {
+      ok: true,
+      intent: 'clarify',
+      message: composePlanMessage(AI_DELETE_NO_MATCH_MESSAGE, buildPlanNotes(missingIds, outOfRangeIds)),
+      omittedCount
+    };
+  }
+  const orderedIds = collectPlanTargetIds(resolvedIds, allItems);
+  const targets = orderedIds.map(id => {
+    const row = allItems.find(item => item.id === id);
+    const isAmbiguous = isAmbiguousTitle(row.title, allItems);
+    return {
+      id: row.id,
+      title: row.title,
+      kind: row.kind,
+      deadline: row.deadline,
+      status: row.status,
+      selected: !isAmbiguous,
+      isAmbiguous
+    };
+  });
+  return {
+    ok: true,
+    intent: 'delete',
+    message: composePlanMessage(payload.message, buildPlanNotes(missingIds, outOfRangeIds)),
+    omittedCount,
+    delete: { targets }
+  };
+}
+
+function normalizeCleanupPlan(options) {
+  const { payload, allItems, now, omittedCount } = options;
+  const range = resolveRange(payload?.cleanup?.range, now, { allowAll: true });
+  if (!range) {
+    return { ok: true, intent: 'clarify', message: AI_CLEANUP_NO_RANGE_MESSAGE, omittedCount };
+  }
+  const targets = (Array.isArray(allItems) ? allItems : [])
+    .filter(item => item.status === 'completed'
+      && ['assignment', 'activity'].includes(item.kind)
+      && String(item.deadline).slice(0, 10) >= range.start
+      && String(item.deadline).slice(0, 10) <= range.end)
+    .sort((a, b) => a.deadline.localeCompare(b.deadline) || a.id - b.id)
+    .map(item => ({ id: item.id, title: item.title, kind: item.kind, deadline: item.deadline, status: item.status, selected: true }));
+  return {
+    ok: true,
+    intent: 'cleanup',
+    message: targets.length === 0
+      ? AI_CLEANUP_EMPTY_MESSAGE
+      : (typeof payload.message === 'string' ? payload.message : ''),
+    omittedCount,
+    cleanup: { targets, rangeLabel: range.label, range: { start: range.start, end: range.end } }
+  };
+}
+
+function buildAssistantSystemPrompt() {
+  return [
+    '你是「截止线」的事项助手，只做意图识别与结构化输出：不写库、不解释推理过程。',
+    '',
+    '只输出一个 JSON 对象；禁止 Markdown、代码围栏、前后说明。',
+    '',
+    'JSON schema：',
+    '{',
+    '  "intent": "create | update | delete | cleanup | query | multiple | unsupported",',
+    '  "detectedIntents": ["create | update | delete | cleanup | query | unsupported"],',
+    '  "message": "给用户的简短说明",',
+    '  "create": { "candidates": [ { "title": "事项标题", "kind": "assignment | activity", "deadline": "YYYY-MM-DD HH:MM", "status": "该类型允许的状态", "description": "说明", "workType": "personal | team | null" } ], "ignored": [ { "text": "片段", "reason": "忽略原因" } ] },',
+    '  "update": { "targetIds": [1, 2], "changes": { "title": "...", "deadline": "...", "status": "...", "description": "...", "workType": "..." } },',
+    '  "delete": { "targetIds": [1, 2] },',
+    '  "cleanup": { "range": { "type": "..." } },',
+    '  "query": { "range": { "type": "..." }, "kind": "assignment | activity | all", "status": "pending | completed | all", "shape": "list | count", "needsScope": true }',
+    '}',
+    '',
+    'range.type 取值：this_week、next_week、last_week、this_month、next_month、last_month、this_year、last_year、month{year,month}、week{date}、custom{start,end}、all。',
+    '',
+    '协议约束：',
+    '1. 只输出 JSON，不输出 Markdown、代码围栏或解释。',
+    '2. deadline 必须是绝对时间 YYYY-MM-DD HH:MM；只给日期补 23:59；不得编造日期，无法确定输出 null。',
+    '3. kind 只能是 assignment / activity；status 只能是该类型允许的状态。',
+    '4. 新增候选必须有明确标题；空标题、泛泛片段不生成候选。',
+    '5. update / delete 的 targetIds 只能取自输入摘要的 id；不得改事项大类；不得输出按时间范围批量删除未完成事项。',
+    '6. cleanup 只针对已完成事项且必须给出 range；无范围时让 range 缺失（本地提示补充）。',
+    '7. 一次输入出现多个类别时 intent = multiple，并在 detectedIntents 列出全部类别。',
+    '8. 日常任务、日记、周报/复盘/建议等越界请求用 unsupported 并在 message 说明。',
+    '9. 相对时间以输入 now.date / now.weekday / now.time 为唯一基准，周一为一周第一天；所指日期已过去时按「最近的下一个同名日期」理解。',
+    '10. 不复述事项说明、附件等未提供的信息。',
+    '11. 「删除上个月所有未完成事项」这类按范围批量删除属越界，用 unsupported 说明并建议逐条处理；已完成批量删除走 cleanup。',
+    '12. 询问「完成动作发生在某月/某周」时说明数据无独立完成时间，只能按截止时间归属 + 当前已完成状态统计。',
+    '13. 「取消 / 删掉 / 删除某事项」一律理解为永久删除该事项，不改状态、不归档。',
+    '14. 查询未说明状态时，列表型问题默认回答范围内未完成事项；明确问完成情况时按已完成统计。'
+  ].join('\n');
+}
+
+function buildAssistantNow(now) {
+  return {
+    date: localDateString(now),
+    weekday: WEEKDAY_FULL[now.getDay()],
+    time: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+  };
+}
+
+function buildAssistantUserMessage(now, items, input) {
+  return JSON.stringify({ now: buildAssistantNow(now), items, input });
+}
+
+function buildQuerySystemPrompt() {
+  return [
+    '你是「截止线」的事项查询助手。只能使用用户消息中给定的统计与条目作答，不得编造条目或数字。',
+    '用简洁中文回答，必要时说明「按截止时间」的统计口径。',
+    '只输出纯文本，不输出 JSON、Markdown 代码围栏或多余解释。'
+  ].join('\n');
+}
+
+function buildQueryUserMessage(meta, question) {
+  return JSON.stringify({
+    question,
+    rangeLabel: meta.rangeLabel,
+    kindLabel: meta.kindLabel,
+    statusLabel: meta.statusLabel,
+    counts: meta.counts,
+    entries: meta.entries
+  });
+}
+
+function weekStart(date) {
+  const result = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  result.setDate(result.getDate() - ((result.getDay() + 6) % 7));
+  return result;
+}
+
+function addDays(date, amount) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + amount);
+}
+
+function formatYmd(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function formatRangeLabel(startDate, endDate, withWeekday) {
+  const weekday = date => (withWeekday ? `（${WEEKDAY_SHORT[date.getDay()]}）` : '');
+  const startText = `${startDate.getFullYear()}年${startDate.getMonth() + 1}月${startDate.getDate()}日`;
+  const endText = startDate.getFullYear() === endDate.getFullYear()
+    ? `${endDate.getMonth() + 1}月${endDate.getDate()}日`
+    : `${endDate.getFullYear()}年${endDate.getMonth() + 1}月${endDate.getDate()}日`;
+  return `${startText}${weekday(startDate)}–${endText}${weekday(endDate)}`;
+}
+
+function buildResolvedRange(startDate, endDate, withWeekday) {
+  return {
+    start: formatYmd(startDate),
+    end: formatYmd(endDate),
+    label: formatRangeLabel(startDate, endDate, Boolean(withWeekday))
+  };
+}
+
+function resolveRange(range, baseDate, options = {}) {
+  if (!range || typeof range !== 'object' || Array.isArray(range) || typeof range.type !== 'string') return null;
+  const base = baseDate instanceof Date && !Number.isNaN(baseDate.getTime()) ? baseDate : new Date();
+  const monday = weekStart(base);
+  const year = base.getFullYear();
+  const monthIndex = base.getMonth();
+  switch (range.type) {
+    case 'all':
+      return options?.allowAll === true
+        ? { start: '0000-01-01', end: '9999-12-31', label: '全部时间' }
+        : null;
+    case 'this_week':
+      return buildResolvedRange(monday, addDays(monday, 6), true);
+    case 'next_week':
+      return buildResolvedRange(addDays(monday, 7), addDays(monday, 13), true);
+    case 'last_week':
+      return buildResolvedRange(addDays(monday, -7), addDays(monday, -1), true);
+    case 'this_month':
+      return buildResolvedRange(new Date(year, monthIndex, 1), new Date(year, monthIndex + 1, 0), false);
+    case 'next_month':
+      return buildResolvedRange(new Date(year, monthIndex + 1, 1), new Date(year, monthIndex + 2, 0), false);
+    case 'last_month':
+      return buildResolvedRange(new Date(year, monthIndex - 1, 1), new Date(year, monthIndex, 0), false);
+    case 'this_year':
+      return buildResolvedRange(new Date(year, 0, 1), new Date(year, 11, 31), false);
+    case 'last_year':
+      return buildResolvedRange(new Date(year - 1, 0, 1), new Date(year - 1, 11, 31), false);
+    case 'month': {
+      if (!Number.isInteger(range.year) || range.year < 2000 || range.year > 2100) return null;
+      if (!Number.isInteger(range.month) || range.month < 1 || range.month > 12) return null;
+      return buildResolvedRange(new Date(range.year, range.month - 1, 1), new Date(range.year, range.month, 0), false);
+    }
+    case 'week': {
+      let value;
+      try {
+        value = validateDeadline(range.date);
+      } catch {
+        return null;
+      }
+      const [weekYear, weekMonth, weekDay] = value.slice(0, 10).split('-').map(Number);
+      const start = weekStart(new Date(weekYear, weekMonth - 1, weekDay));
+      return buildResolvedRange(start, addDays(start, 6), true);
+    }
+    case 'custom': {
+      let startValue;
+      let endValue;
+      try {
+        startValue = validateDeadline(range.start);
+        endValue = validateDeadline(range.end);
+      } catch {
+        return null;
+      }
+      const toDate = value => {
+        const [customYear, customMonth, customDay] = value.slice(0, 10).split('-').map(Number);
+        return new Date(customYear, customMonth - 1, customDay);
+      };
+      let start = toDate(startValue);
+      let end = toDate(endValue);
+      if (start.getTime() > end.getTime()) {
+        const swap = start;
+        start = end;
+        end = swap;
+      }
+      return buildResolvedRange(start, end, false);
+    }
+    default:
+      return null;
+  }
+}
+
+function normalizeQueryFilters(query) {
+  const source = query && typeof query === 'object' && !Array.isArray(query) ? query : {};
+  return {
+    kind: ['assignment', 'activity', 'all'].includes(source.kind) ? source.kind : 'all',
+    status: ['pending', 'completed', 'all'].includes(source.status) ? source.status : 'pending',
+    shape: ['list', 'count'].includes(source.shape) ? source.shape : 'list'
+  };
+}
+
+function collectQueryData(rows, range, kind, status) {
+  const byKind = rows.filter(item => {
+    const datePart = String(item.deadline).slice(0, 10);
+    if (datePart < range.start || datePart > range.end) return false;
+    return kind === 'all' || item.kind === kind;
+  });
+  const counts = {
+    total: 0,
+    assignment: { total: 0, pending: 0, completed: 0 },
+    activity: { total: 0, pending: 0, completed: 0 }
+  };
+  for (const item of byKind) {
+    const bucket = counts[item.kind];
+    if (!bucket) continue;
+    bucket.total += 1;
+    if (item.status === 'completed') bucket.completed += 1;
+    else bucket.pending += 1;
+  }
+  counts.total = counts.assignment.total + counts.activity.total;
+  const entries = byKind
+    .filter(item => status === 'all' || (status === 'completed' ? item.status === 'completed' : item.status !== 'completed'))
+    .sort((a, b) => a.deadline.localeCompare(b.deadline) || a.id - b.id)
+    .map(item => ({ id: item.id, title: item.title, kind: item.kind, deadline: item.deadline, status: item.status }));
+  return { counts, entries };
+}
+
+function buildQueryFallback(meta, shape) {
+  if (meta.counts.total === 0 || (shape === 'list' && meta.entries.length === 0)) {
+    return `按截止时间在 ${meta.rangeLabel} 内没有符合条件的事项。`;
+  }
+  if (shape === 'count') {
+    const assignment = meta.counts.assignment;
+    const activity = meta.counts.activity;
+    return `按截止时间在 ${meta.rangeLabel} 内：共 ${meta.counts.total} 个事项，其中大作业 ${assignment.total} 个（未完成 ${assignment.pending}、已完成 ${assignment.completed}），活动 ${activity.total} 个（未完成 ${activity.pending}、已完成 ${activity.completed}）。`;
+  }
+  const lines = meta.entries.map(entry => `\n${entry.deadline} · ${AI_QUERY_KIND_LABELS[entry.kind]} · ${entry.title}`).join('');
+  return `按截止时间在 ${meta.rangeLabel} 内，共 ${meta.counts.total} 个${meta.statusLabel}事项：${lines}`;
+}
+
+async function handleAssistantQuery(options) {
+  const { payload, config, now, input, omittedCount } = options;
+  const range = resolveRange(payload?.query?.range, now);
+  if (!range) {
+    return { ok: true, intent: 'clarify', message: '请补充时间范围（例如本周、下个月、今年）后重试。', omittedCount };
+  }
+  const filters = normalizeQueryFilters(payload?.query);
+  const rows = readItemsForAssistant();
+  const { counts, entries } = collectQueryData(rows, range, filters.kind, filters.status);
+  const meta = {
+    rangeLabel: range.label,
+    kindLabel: AI_QUERY_KIND_LABELS[filters.kind],
+    statusLabel: AI_QUERY_STATUS_LABELS[filters.status],
+    counts,
+    entries
+  };
+  let answer;
+  let fallback = false;
+  try {
+    const chat = await callChatCompletion({
+      endpoint: config.endpoint,
+      apiKey: config.apiKey,
+      model: config.model,
+      messages: [
+        { role: 'system', content: buildQuerySystemPrompt() },
+        { role: 'user', content: buildQueryUserMessage(meta, input) }
+      ],
+      timeoutMs: resolveAiTimeoutMs()
+    });
+    answer = readChatText(chat);
+  } catch {
+    answer = buildQueryFallback(meta, filters.shape);
+    fallback = true;
+  }
+  return { ok: true, intent: 'query', message: '', omittedCount, query: { answer, fallback, meta } };
+}
+
+function registerAssistantHandlers() {
+  ipcMain.handle('assistant:parse', async (event, input) => {
+    try {
+      if (!isMainWindowSender(event)) {
+        return { ok: false, code: 'forbidden', message: AI_ERROR_TABLE.forbidden.message, retryable: AI_ERROR_TABLE.forbidden.retryable };
+      }
+      const config = readAiConfig();
+      if (!config.endpoint || !config.model || !config.apiKey) {
+        return { ok: false, code: 'not_configured', message: AI_ERROR_TABLE.not_configured.message, retryable: AI_ERROR_TABLE.not_configured.retryable };
+      }
+      if (!isValidAiEndpoint(config.endpoint)) {
+        return { ok: false, code: 'invalid_endpoint', message: AI_ERROR_TABLE.invalid_endpoint.message, retryable: AI_ERROR_TABLE.invalid_endpoint.retryable };
+      }
+      const invalidInput = message => ({ ok: false, code: 'invalid_input', message, retryable: false });
+      if (typeof input !== 'string') return invalidInput(AI_ERROR_TABLE.invalid_input.message);
+      const text = input.trim();
+      if (!text) return invalidInput(AI_ERROR_TABLE.invalid_input.message);
+      if (text.length > AI_INPUT_MAX_LENGTH) return invalidInput(`内容超过 ${AI_INPUT_MAX_LENGTH} 字符，请精简后再提交`);
+      const now = new Date();
+      const allItems = readItemsForAssistant();
+      const summary = buildAssistantSummary(now, allItems);
+      const chat = await callChatCompletion({
+        endpoint: config.endpoint,
+        apiKey: config.apiKey,
+        model: config.model,
+        messages: [
+          { role: 'system', content: buildAssistantSystemPrompt() },
+          { role: 'user', content: buildAssistantUserMessage(now, summary.items, text) }
+        ],
+        timeoutMs: resolveAiTimeoutMs()
+      });
+      const payload = readAssistantPayload(chat);
+      const planOptions = {
+        payload,
+        summaryItems: summary.items,
+        allItems,
+        now,
+        omittedCount: summary.omittedCount
+      };
+      const normalized = normalizeAssistantIntent(payload);
+      if (normalized.intent === 'query') {
+        return await handleAssistantQuery({ payload, config, now, input: text, omittedCount: summary.omittedCount });
+      }
+      if (normalized.intent === 'create') return normalizeCreatePlan(planOptions);
+      if (normalized.intent === 'update') return normalizeUpdatePlan(planOptions);
+      if (normalized.intent === 'delete') return normalizeDeletePlan(planOptions);
+      if (normalized.intent === 'cleanup') return normalizeCleanupPlan(planOptions);
+      return { ok: true, intent: normalized.intent, message: normalized.message, omittedCount: summary.omittedCount };
+    } catch (error) {
+      if (error instanceof AssistantFailure) {
+        return { ok: false, code: error.code, message: error.message, retryable: error.retryable };
+      }
+      return { ok: false, code: 'unknown', message: AI_ERROR_TABLE.unknown.message, retryable: AI_ERROR_TABLE.unknown.retryable };
+    }
+  });
 }
 
 function registerDataHandlers() {
@@ -937,8 +2002,31 @@ function registerDataHandlers() {
   ipcMain.handle('settings:get', () => ({
     notificationsEnabled: database.prepare('SELECT value FROM settings WHERE key = ?').get('notifications_enabled')?.value !== 'false',
     widgetEnabled: isWidgetEnabled(),
-    dataPath: getPaths().root
+    dataPath: getPaths().root,
+    ai: buildAiSettingsView()
   }));
+
+  ipcMain.handle('settings:set-ai', (event, payload) => {
+    try {
+      if (!isMainWindowSender(event)) return { ok: false, message: '当前窗口无权执行该操作' };
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return { ok: false, message: 'AI 配置格式不正确' };
+      if (typeof payload.endpoint !== 'string') return { ok: false, message: 'AI 配置格式不正确' };
+      if (typeof payload.model !== 'string') return { ok: false, message: 'AI 配置格式不正确' };
+      if (payload.apiKey !== undefined && typeof payload.apiKey !== 'string') return { ok: false, message: 'AI 配置格式不正确' };
+      const endpoint = payload.endpoint.trim();
+      const model = payload.model.trim();
+      const apiKey = typeof payload.apiKey === 'string' ? payload.apiKey.trim() : '';
+      if (endpoint && !isValidAiEndpoint(endpoint)) return { ok: false, message: '接口地址格式不正确，请填写完整的 http/https 地址' };
+      if (model.length > AI_MODEL_MAX_LENGTH) return { ok: false, message: '模型名内容过长' };
+      if (apiKey.length > AI_KEY_MAX_LENGTH) return { ok: false, message: 'API Key 内容过长' };
+      setSetting(AI_SETTING_KEYS.endpoint, endpoint);
+      setSetting(AI_SETTING_KEYS.model, model);
+      if (apiKey) setSetting(AI_SETTING_KEYS.apiKey, apiKey);
+      return { ok: true, ai: buildAiSettingsView() };
+    } catch {
+      return { ok: false, message: '保存失败，请重试' };
+    }
+  });
 
   ipcMain.handle('settings:set-widget', (_event, enabled) => {
     setSetting('widget_enabled', enabled ? 'true' : 'false');
@@ -1008,6 +2096,7 @@ if (!app.requestSingleInstanceLock()) {
     registerDiaryHandlers();
     registerHabitHandlers();
     registerDataHandlers();
+    registerAssistantHandlers();
     registerWidgetHandlers();
     createWindow();
     createTray();

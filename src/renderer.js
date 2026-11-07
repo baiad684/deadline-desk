@@ -25,8 +25,21 @@ const icons = {
   folder: '<path d="M3 5h6l2 2h10v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
   warning: '<path d="M10.3 2.9 1.8 17a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 2.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
-  inbox: '<path d="M4 4h16v16H4z"/><path d="M4 14h4l2 3h4l2-3h4"/>'
+  inbox: '<path d="M4 4h16v16H4z"/><path d="M4 14h4l2 3h4l2-3h4"/>',
+  assistant: '<path d="M12 3l1.7 5.3L19 10l-5.3 1.7L12 17l-1.7-5.3L5 10l5.3-1.7z"/><path d="M19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z"/>'
 };
+
+const ASSISTANT_INPUT_MAX_LENGTH = 3000;
+const ASSISTANT_TITLE_MAX_LENGTH = 120;
+const ASSISTANT_DESCRIPTION_MAX_LENGTH = 10000;
+const ASSISTANT_STATUS_OPTIONS = {
+  assignment: [['not_started', '未开始'], ['in_progress', '进行中'], ['completed', '已完成']],
+  activity: [['not_completed', '未完成'], ['completed', '已完成']]
+};
+const ASSISTANT_WORK_TYPE_OPTIONS = [['personal', '个人'], ['team', '团队']];
+const ASSISTANT_DEFAULT_PLACEHOLDER = '提交后会在这里显示预览或答复。';
+const ASSISTANT_LOADING_TEXT = '正在处理…';
+const ASSISTANT_SUMMARY_LIMIT = 100;
 
 const state = {
   items: [],
@@ -51,7 +64,18 @@ const state = {
   diarySavedContent: '',
   diarySaveTimer: null,
   habits: [],
-  habitArchivedOpen: false
+  habitArchivedOpen: false,
+  assistant: {
+    input: '',
+    loading: false,
+    executing: false,
+    seq: 0,
+    view: null,
+    records: [],
+    dirty: false,
+    error: null
+  },
+  ai: { configured: false, endpoint: '', model: '', keyMask: '', editingKey: false }
 };
 
 const api = window.deadlineDesk;
@@ -122,6 +146,10 @@ function mountIcons(root = document) {
 
 function escapeHtml(value = '') {
   return String(value).replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[character]));
+}
+
+function hasOwn(object, key) {
+  return Object.prototype.hasOwnProperty.call(object, key);
 }
 
 function localDate(date = new Date()) {
@@ -798,7 +826,9 @@ async function enterDiaryPage() {
 }
 
 function switchPage(page) {
-  if (state.currentPage === 'diary' && page !== 'diary') flushDiarySave();
+  const previous = state.currentPage;
+  if (previous === 'diary' && page !== 'diary') flushDiarySave();
+  if (previous === 'assistant' && page !== 'assistant') leaveAssistantPage();
   state.currentPage = page;
   $$('.nav-item[data-page]').forEach(button => {
     const active = button.dataset.page === page;
@@ -807,8 +837,970 @@ function switchPage(page) {
     else button.removeAttribute('aria-current');
   });
   $$('.page').forEach(view => view.classList.toggle('active', view.dataset.pageView === page));
-  $('#searchBox').classList.toggle('hidden', page === 'settings' || page === 'diary' || page === 'habits');
+  $('#searchBox').classList.toggle('hidden', page === 'settings' || page === 'diary' || page === 'habits' || page === 'assistant');
   if (page === 'diary') enterDiaryPage();
+  if (page === 'assistant' && previous !== 'assistant') enterAssistantPage();
+}
+
+// ---------- 助手 ----------
+
+async function refreshAssistantConfig() {
+  let settings;
+  try {
+    settings = await api.settings.get();
+  } catch {
+    return;
+  }
+  if (!settings || !settings.ai) return;
+  state.ai = {
+    ...state.ai,
+    ...settings.ai,
+    configured: Boolean(settings.ai.configured),
+    endpoint: typeof settings.ai.endpoint === 'string' ? settings.ai.endpoint : '',
+    model: typeof settings.ai.model === 'string' ? settings.ai.model : '',
+    keyMask: typeof settings.ai.keyMask === 'string' ? settings.ai.keyMask : '',
+    editingKey: state.ai.editingKey
+  };
+}
+
+function renderAssistantConfigWarning() {
+  const ready = Boolean(state.ai && state.ai.configured);
+  const warning = $('#assistantConfigWarning');
+  warning.dataset.config = ready ? 'ready' : 'missing';
+  warning.classList.toggle('hidden', ready);
+}
+
+async function enterAssistantPage() {
+  await refreshAssistantConfig();
+  if (state.currentPage !== 'assistant') return;
+  renderAssistantConfigWarning();
+  $('#assistantInput').value = state.assistant.input;
+  renderAssistant();
+  renderAssistantControls();
+}
+
+function leaveAssistantPage() {
+  state.assistant.seq += 1;
+  if (state.assistant.executing === false) state.assistant.loading = false;
+  state.assistant.view = null;
+  state.assistant.records = [];
+  state.assistant.dirty = false;
+  state.assistant.error = null;
+  $('#assistantResult').innerHTML = '';
+  const records = $('#assistantRecords');
+  records.innerHTML = '';
+  records.classList.add('hidden');
+  $('#assistantInput').disabled = false;
+  $('#assistantSubmit').disabled = false;
+  $('#assistantRetry').disabled = false;
+}
+
+function assistantTimeLabel() {
+  const now = new Date();
+  return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+}
+
+function splitAssistantDeadline(value) {
+  if (!value) return { date: '', time: '' };
+  const [date, time = ''] = String(value).split(' ');
+  return { date, time };
+}
+
+function joinAssistantDeadline(date, time) {
+  if (!date) return null;
+  return `${date} ${time || '23:59'}`;
+}
+
+function assistantDefaultStatus(kind) {
+  return kind === 'assignment' ? 'not_started' : 'not_completed';
+}
+
+function isAssistantStatusAllowed(kind, status) {
+  return (ASSISTANT_STATUS_OPTIONS[kind] || []).some(([value]) => value === status);
+}
+
+function assistantStatusOptionsHtml(kind, status) {
+  const head = status === null ? '<option value="" selected>请选择状态</option>' : '';
+  const options = (ASSISTANT_STATUS_OPTIONS[kind] || [])
+    .map(([value, label]) => `<option value="${value}"${status === value ? ' selected' : ''}>${label}</option>`)
+    .join('');
+  return head + options;
+}
+
+function assistantWorkTypeSelectHtml(value) {
+  const current = value || 'personal';
+  return ASSISTANT_WORK_TYPE_OPTIONS
+    .map(([entry, label]) => `<option value="${entry}"${current === entry ? ' selected' : ''}>${label}</option>`)
+    .join('');
+}
+
+function assistantKindLabel(kind) {
+  return kind === 'assignment' ? '大作业' : '活动';
+}
+
+function assistantStatusLabel(status) {
+  if (status === null || status === undefined) return '请选择状态';
+  const labels = { not_started: '未开始', in_progress: '进行中', not_completed: '未完成', completed: '已完成' };
+  return labels[status] || status;
+}
+
+function normalizeAssistantView(result) {
+  const view = {
+    intent: result.intent,
+    message: typeof result.message === 'string' ? result.message : '',
+    omittedCount: Number(result.omittedCount) || 0
+  };
+  if (result.intent === 'create') {
+    const create = result.create || {};
+    view.create = {
+      candidates: (create.candidates || []).map(candidate => ({ ...candidate, removed: false, statusAdjusted: Boolean(candidate.statusAdjusted) })),
+      ignored: create.ignored || []
+    };
+  } else if (result.intent === 'update') {
+    const update = result.update || {};
+    const targets = (update.targets || []).map(target => {
+      const existing = state.items.find(item => item.id === target.id);
+      return {
+        ...target,
+        description: existing && typeof existing.description === 'string' ? existing.description : '',
+        work_type: existing && existing.work_type ? existing.work_type : null
+      };
+    });
+    view.update = { ...update, applyToId: update.applyToId, targets, draft: null };
+    if (view.update.applyToId !== null) {
+      const target = targets.find(item => item.id === view.update.applyToId);
+      if (target) view.update.draft = initializeUpdateDraft(view.update, target);
+    }
+  } else if (result.intent === 'delete') {
+    view.delete = { targets: ((result.delete || {}).targets || []).map(target => ({ ...target })) };
+  } else if (result.intent === 'cleanup') {
+    const cleanup = result.cleanup || {};
+    view.cleanup = { ...cleanup, targets: (cleanup.targets || []).map(target => ({ ...target })) };
+  } else if (result.intent === 'query') {
+    view.query = result.query;
+  }
+  return view;
+}
+
+function assistantSummaryHtml(view) {
+  let html = '';
+  if (view.message.trim() !== '') html += `<p class="assistant-summary">${escapeHtml(view.message)}</p>`;
+  if (view.omittedCount > 0) {
+    html += `<p class="assistant-omitted">本次只向模型发送了 ${ASSISTANT_SUMMARY_LIMIT} 条事项，另有 ${view.omittedCount} 条未发送；如需修改被省略的事项，请到对应列表操作。</p>`;
+  }
+  return html;
+}
+
+function renderAssistant() {
+  let html;
+  if (state.assistant.loading) {
+    html = `<div class="assistant-placeholder">${ASSISTANT_LOADING_TEXT}</div>`;
+  } else if (state.assistant.error) {
+    html = renderAssistantError();
+  } else if (state.assistant.view) {
+    const view = state.assistant.view;
+    html = assistantSummaryHtml(view);
+    if (view.intent === 'create') html += renderCreatePlan(view.create);
+    else if (view.intent === 'update') html += renderUpdatePlan(view.update);
+    else if (view.intent === 'delete') html += renderTargetPlan(view.delete, 'delete');
+    else if (view.intent === 'cleanup') html += renderTargetPlan(view.cleanup, 'cleanup');
+    else if (view.intent === 'query') html += renderQueryResult(view.query);
+  } else {
+    html = `<div class="assistant-placeholder">${ASSISTANT_DEFAULT_PLACEHOLDER}</div>`;
+  }
+  const container = $('#assistantResult');
+  container.innerHTML = html;
+  mountIcons(container);
+  renderAssistantRecords();
+}
+
+function renderAssistantError() {
+  const error = state.assistant.error;
+  const message = error.message || '处理失败，请重试';
+  const settingsButton = error.code === 'not_configured'
+    ? '<button class="secondary-button" data-assistant-action="go-settings">前往设置</button>'
+    : '';
+  return `<div class="assistant-error"><strong>无法完成解析</strong><p>${escapeHtml(message)}</p>${settingsButton}</div>`;
+}
+
+function renderCreatePlan(plan) {
+  let html = '';
+  if (plan.ignored.length) {
+    html += `<div class="assistant-ignored">${plan.ignored.map(entry => `<div class="assistant-ignored-item">${entry.text === '' ? '' : `<span>${escapeHtml(entry.text)}</span>`}<em>${escapeHtml(entry.reason)}</em></div>`).join('')}</div>`;
+  }
+  const visible = plan.candidates.filter(candidate => !candidate.removed);
+  if (!visible.length) return `${html}<div class="assistant-empty">没有可写入的候选。</div>`;
+  const count = assistantCreateCount(plan);
+  const reason = assistantCreateDisabledReason(plan);
+  return `${html}<div class="assistant-rows">${visible.map(candidate => renderCreateRow(candidate)).join('')}</div><footer class="assistant-footer"><span class="assistant-reason">${escapeHtml(reason)}</span><button class="primary-button" data-assistant-action="write-create"${count === 0 ? ' disabled' : ''}>写入 ${count} 条</button></footer>`;
+}
+
+function renderCreateRow(candidate) {
+  const rowId = escapeHtml(candidate.rowId);
+  const title = String(candidate.title ?? '');
+  const executable = isCreateCandidateExecutable(candidate);
+  const { date, time } = splitAssistantDeadline(candidate.deadline);
+  const badges = [];
+  if (candidate.duplicate) {
+    badges.push(`<span class="assistant-badge duplicate" title="与「${escapeHtml(candidate.duplicate.title)}」（${escapeHtml(candidate.duplicate.deadline)}）相似">疑似重复</span>`);
+  }
+  if (candidate.deadlineIssue === 'missing' || candidate.deadlineIssue === 'invalid') badges.push('<span class="assistant-badge missing">待补全</span>');
+  if (candidate.expired) badges.push('<span class="assistant-badge expired">已过期</span>');
+  if (candidate.statusInvalid) badges.push('<span class="assistant-badge status-invalid">状态无效</span>');
+  if (candidate.statusAdjusted) badges.push('<span class="assistant-badge status-adjusted">状态已重置</span>');
+  if (candidate.titleTooLong) badges.push('<span class="assistant-badge title-too-long">标题过长</span>');
+  const kindOptions = [['assignment', '大作业'], ['activity', '活动']]
+    .map(([value, label]) => `<option value="${value}"${candidate.kind === value ? ' selected' : ''}>${label}</option>`)
+    .join('');
+  return `<article class="assistant-row" data-row-id="${rowId}">
+    <div class="assistant-row-head">
+      <label class="assistant-check"><input type="checkbox" data-assistant-field="selected"${candidate.selected ? ' checked' : ''}${executable ? '' : ' disabled'}></label>
+      <strong class="assistant-row-title">${escapeHtml(title)}</strong>
+      <div class="assistant-badges">${badges.join('')}</div>
+      <button type="button" class="icon-button" data-assistant-action="remove-row" data-row-id="${rowId}" title="移除" aria-label="移除「${escapeHtml(title)}」"><span data-icon="close"></span></button>
+    </div>
+    <div class="assistant-fields">
+      <label class="field full"><span>标题</span><input data-assistant-field="title" maxlength="${ASSISTANT_TITLE_MAX_LENGTH}" value="${escapeHtml(title)}"></label>
+      <label class="field"><span>类型</span><select data-assistant-field="kind">${kindOptions}</select></label>
+      <label class="field"><span>截止日期</span><input type="date" data-assistant-field="deadlineDate" value="${escapeHtml(date)}"></label>
+      <label class="field"><span>截止时刻</span><input type="time" data-assistant-field="deadlineTime" value="${escapeHtml(time)}"></label>
+      <label class="field"><span>状态</span><select data-assistant-field="status">${assistantStatusOptionsHtml(candidate.kind, candidate.status)}</select></label>
+      <label class="field assistant-worktype${candidate.kind === 'activity' ? ' hidden' : ''}"><span>个人/团队</span><select data-assistant-field="workType">${assistantWorkTypeSelectHtml(candidate.workType)}</select></label>
+      <label class="field full"><span>说明</span><textarea data-assistant-field="description" maxlength="${ASSISTANT_DESCRIPTION_MAX_LENGTH}">${escapeHtml(candidate.description ?? '')}</textarea></label>
+    </div>
+  </article>`;
+}
+
+function renderUpdatePlan(plan) {
+  let html = '';
+  const target = plan.targets.find(item => item.id === plan.applyToId);
+  if (plan.targets.length > 1 || plan.ambiguous) {
+    html += `<div class="assistant-targets">${plan.targets.map(item => `<label class="assistant-target-option"><input type="radio" name="assistantTarget" data-assistant-action="pick-target" value="${item.id}"${plan.applyToId === item.id ? ' checked' : ''}><span>${escapeHtml(item.title)} · ${assistantKindLabel(item.kind)} · ${formatDate(item.deadline, true)} · ${assistantStatusLabel(item.status)}</span></label>`).join('')}</div><p class="assistant-hint">匹配到多个事项，请选择一个。</p>`;
+  }
+  if (plan.applyToId !== null && target && plan.draft) html += renderUpdateDiff(plan, target);
+  const reason = assistantUpdateDisabledReason(plan);
+  return `${html}<footer class="assistant-footer"><span class="assistant-reason">${escapeHtml(reason)}</span><button class="primary-button" data-assistant-action="save-update"${reason === '' ? '' : ' disabled'}>保存修改</button></footer>`;
+}
+
+function renderUpdateDiff(plan, target) {
+  const draft = plan.draft;
+  const changes = plan.changes || {};
+  const rows = [];
+  if (hasOwn(changes, 'deadline')) {
+    const { date, time } = splitAssistantDeadline(draft.deadline);
+    rows.push(`<div class="assistant-diff-row" data-field="deadline"><span class="assistant-old">${escapeHtml(formatDate(target.deadline, true))}</span><span class="assistant-arrow">→</span><div class="assistant-new"><input type="date" data-assistant-field="deadlineDate" value="${escapeHtml(date)}"><input type="time" data-assistant-field="deadlineTime" value="${escapeHtml(time)}"></div></div>`);
+  }
+  if (hasOwn(changes, 'status')) {
+    rows.push(`<div class="assistant-diff-row" data-field="status"><span class="assistant-old">${escapeHtml(assistantStatusLabel(target.status))}</span><span class="assistant-arrow">→</span><div class="assistant-new"><select data-assistant-field="status">${assistantStatusOptionsHtml(target.kind, draft.status ?? null)}</select></div></div>`);
+  }
+  if (hasOwn(changes, 'title')) {
+    rows.push(`<div class="assistant-diff-row" data-field="title"><span class="assistant-old">${escapeHtml(target.title)}</span><span class="assistant-arrow">→</span><div class="assistant-new"><input data-assistant-field="title" maxlength="${ASSISTANT_TITLE_MAX_LENGTH}" value="${escapeHtml(draft.title ?? '')}"></div></div>`);
+  }
+  if (hasOwn(changes, 'description')) {
+    rows.push(`<div class="assistant-diff-row" data-field="description"><span class="assistant-old">${target.description === '' ? '（空）' : escapeHtml(target.description)}</span><span class="assistant-arrow">→</span><div class="assistant-new"><textarea data-assistant-field="description" maxlength="${ASSISTANT_DESCRIPTION_MAX_LENGTH}">${escapeHtml(draft.description ?? '')}</textarea></div></div>`);
+  }
+  if (target.kind === 'assignment' && hasOwn(changes, 'workType')) {
+    rows.push(`<div class="assistant-diff-row" data-field="workType"><span class="assistant-old">${target.work_type === 'team' ? '团队' : '个人'}</span><span class="assistant-arrow">→</span><div class="assistant-new"><select data-assistant-field="workType">${assistantWorkTypeSelectHtml(draft.workType ?? null)}</select></div></div>`);
+  }
+  return `<div class="assistant-diff" data-target-id="${target.id}">${rows.join('')}</div>`;
+}
+
+function renderTargetPlan(plan, mode) {
+  const targets = plan.targets;
+  let html = '';
+  if (mode === 'cleanup' && targets.length > 0) html += `<p class="assistant-range">清理范围：${escapeHtml(plan.rangeLabel)}</p>`;
+  if (!targets.length) return '';
+  const count = targets.filter(target => target.selected).length;
+  const reason = assistantTargetDisabledReason(plan);
+  html += '<div class="assistant-danger-note">永久删除，含全部附件，删除后无法恢复。</div>';
+  html += `<div class="assistant-rows">${targets.map(target => `<article class="assistant-row assistant-target-row" data-target-id="${target.id}"><label class="assistant-check"><input type="checkbox" data-assistant-field="selected"${target.selected ? ' checked' : ''}></label><div class="assistant-row-main"><strong>${escapeHtml(target.title)}</strong><span>${assistantKindLabel(target.kind)} · ${formatDate(target.deadline, true)} · ${assistantStatusLabel(target.status)}</span></div></article>`).join('')}</div>`;
+  html += `<footer class="assistant-footer"><span class="assistant-reason">${escapeHtml(reason)}</span><button class="primary-button" data-assistant-action="delete"${count === 0 ? ' disabled' : ''}>删除 ${count} 条</button></footer>`;
+  return html;
+}
+
+function renderQueryResult(plan) {
+  const meta = plan.meta;
+  let html = `<p class="assistant-answer">${escapeHtml(plan.answer)}</p>`;
+  if (plan.fallback === true) html += '<p class="assistant-fallback">模型组织文字失败，以下为本地数据汇总</p>';
+  html += `<p class="assistant-query-meta">统计口径：按截止时间在 ${escapeHtml(meta.rangeLabel)}；${escapeHtml(meta.kindLabel)} · ${escapeHtml(meta.statusLabel)}；共 ${meta.counts.total} 项。</p>`;
+  html += `<div class="assistant-query-counts">大作业 ${meta.counts.assignment.total} 个（未完成 ${meta.counts.assignment.pending}、已完成 ${meta.counts.assignment.completed}），活动 ${meta.counts.activity.total} 个（未完成 ${meta.counts.activity.pending}、已完成 ${meta.counts.activity.completed}）。</div>`;
+  if (meta.entries.length > 0) {
+    html += `<div class="assistant-query-entries">${meta.entries.map(entry => `<div class="assistant-query-entry">${formatDate(entry.deadline, true)} · ${assistantKindLabel(entry.kind)} · ${escapeHtml(entry.title)} · ${assistantStatusLabel(entry.status)}</div>`).join('')}</div>`;
+  }
+  return html;
+}
+
+function renderAssistantRecords() {
+  const container = $('#assistantRecords');
+  if (!state.assistant.records.length) {
+    container.innerHTML = '';
+    container.classList.add('hidden');
+    return;
+  }
+  container.classList.remove('hidden');
+  container.innerHTML = state.assistant.records.map(record => `<section class="assistant-record"><header><strong>${escapeHtml(record.time)}</strong><span>${escapeHtml(record.summary)}</span></header><ul>${record.details.map(detail => `<li>${escapeHtml(detail)}</li>`).join('')}</ul></section>`).join('');
+  mountIcons(container);
+}
+
+function renderAssistantControls() {
+  const loading = state.assistant.loading;
+  $('#assistantInput').disabled = loading;
+  $('#assistantSubmit').disabled = loading;
+  $('#assistantRetry').disabled = loading;
+  $('#assistantRetry').classList.toggle('hidden', !(state.assistant.error && state.assistant.error.retryable && !loading));
+  const submit = $('#assistantSubmit');
+  submit.innerHTML = `<span data-icon="check"></span>${loading ? ASSISTANT_LOADING_TEXT : '解析'}`;
+  mountIcons(submit);
+  const counter = $('#assistantCounter');
+  counter.textContent = `${state.assistant.input.length} / ${ASSISTANT_INPUT_MAX_LENGTH}`;
+  counter.classList.toggle('over', state.assistant.input.length > ASSISTANT_INPUT_MAX_LENGTH);
+  refreshAssistantActionBar();
+}
+
+function refreshAssistantActionBar() {
+  const view = state.assistant.view;
+  if (!view || state.assistant.loading || state.assistant.error) return;
+  if (view.intent === 'clarify' || view.intent === 'unsupported' || view.intent === 'query') return;
+  const action = { create: 'write-create', update: 'save-update', delete: 'delete', cleanup: 'delete' }[view.intent];
+  const container = $('#assistantResult');
+  const button = container.querySelector(`[data-assistant-action="${action}"]`);
+  const plan = view[view.intent];
+  if (!button || !plan) return;
+  let reason;
+  if (view.intent === 'create') {
+    const count = assistantCreateCount(plan);
+    button.textContent = `写入 ${count} 条`;
+    reason = assistantCreateDisabledReason(plan);
+  } else if (view.intent === 'update') {
+    button.textContent = '保存修改';
+    reason = assistantUpdateDisabledReason(plan);
+  } else {
+    const count = plan.targets.filter(target => target.selected).length;
+    button.textContent = `删除 ${count} 条`;
+    reason = assistantTargetDisabledReason(plan);
+  }
+  button.disabled = reason !== '';
+  const reasonNode = container.querySelector('.assistant-reason');
+  if (reasonNode) reasonNode.textContent = reason;
+}
+
+function isCreateCandidateExecutable(candidate) {
+  if (candidate.removed) return false;
+  const title = String(candidate.title ?? '').trim();
+  if (title === '' || title.length > ASSISTANT_TITLE_MAX_LENGTH) return false;
+  if (candidate.deadlineIssue !== null) return false;
+  return candidate.status !== null && isAssistantStatusAllowed(candidate.kind, candidate.status);
+}
+
+function createPayloadOf(candidate) {
+  return {
+    kind: candidate.kind,
+    title: String(candidate.title).trim(),
+    description: String(candidate.description ?? '').trim().slice(0, ASSISTANT_DESCRIPTION_MAX_LENGTH),
+    deadline: candidate.deadline,
+    status: candidate.status,
+    workType: candidate.kind === 'assignment' ? (candidate.workType || 'personal') : null
+  };
+}
+
+function assistantCreateCount(plan) {
+  return plan.candidates.filter(candidate => !candidate.removed && candidate.selected && isCreateCandidateExecutable(candidate)).length;
+}
+
+function assistantCreateDisabledReason(plan) {
+  const visible = plan.candidates.filter(candidate => !candidate.removed);
+  if (!visible.length) return '没有可写入的候选';
+  const selected = visible.filter(candidate => candidate.selected);
+  if (!selected.length) return '没有选择任何条目';
+  if (selected.every(candidate => candidate.deadlineIssue !== null)) return '所选条目均需先补全截止时间';
+  if (selected.every(candidate => candidate.status === null)) return '请先为所选事项选择有效状态';
+  if (selected.every(candidate => candidate.titleTooLong)) return '标题超过 120 字符，请缩短后再保存';
+  if (selected.every(candidate => !isCreateCandidateExecutable(candidate))) return '所选条目不符合写入条件';
+  return '';
+}
+
+function assistantUpdateDisabledReason(plan) {
+  const target = plan.targets.find(item => item.id === plan.applyToId);
+  const draft = plan.draft;
+  if (plan.applyToId === null || !target || !draft) return '请先选择要修改的事项';
+  if (draft.titleTooLong) return '标题超过 120 字符，请缩短后再保存';
+  if (hasOwn(draft, 'title') && String(draft.title ?? '').trim() === '') return '标题不能为空';
+  if (draft.deadlineInvalid) return '请先补全截止时间';
+  if (hasOwn(draft, 'status') && (draft.status === null || draft.statusInvalid)) return '请先为所选项选择有效状态';
+  if (!assistantDraftDiffers(target, draft)) return '没有可执行的修改';
+  return '';
+}
+
+function assistantTargetDisabledReason(plan) {
+  return plan.targets.some(target => target.selected) ? '' : '没有选择任何条目';
+}
+
+function assistantDraftDiffers(target, draft) {
+  if (hasOwn(draft, 'deadline') && draft.deadline !== target.deadline) return true;
+  if (hasOwn(draft, 'status') && draft.status !== target.status) return true;
+  if (hasOwn(draft, 'title') && draft.title !== target.title) return true;
+  if (hasOwn(draft, 'description') && draft.description !== target.description) return true;
+  if (hasOwn(draft, 'workType') && target.kind === 'assignment' && (draft.workType || 'personal') !== (target.work_type || 'personal')) return true;
+  return false;
+}
+
+function initializeUpdateDraft(plan, target) {
+  const draft = { deadlineInvalid: false, statusInvalid: false, titleTooLong: false };
+  const changes = plan.changes || {};
+  if (hasOwn(changes, 'deadline')) {
+    draft.deadline = typeof changes.deadline === 'string' ? changes.deadline : null;
+    draft.deadlineInvalid = Boolean(plan.deadlineInvalid);
+  }
+  if (hasOwn(changes, 'status')) {
+    if (typeof changes.status === 'string' && isAssistantStatusAllowed(target.kind, changes.status)) {
+      draft.status = changes.status;
+      draft.statusInvalid = false;
+    } else {
+      draft.status = null;
+      draft.statusInvalid = true;
+    }
+  }
+  if (hasOwn(changes, 'title')) {
+    draft.title = changes.title;
+    draft.titleTooLong = Boolean(plan.titleTooLong);
+  }
+  if (hasOwn(changes, 'description')) draft.description = changes.description;
+  if (target.kind === 'assignment' && hasOwn(changes, 'workType')) draft.workType = changes.workType;
+  return draft;
+}
+
+function updatePayloadOf(latest, draft) {
+  if (hasOwn(draft, 'title') && String(draft.title ?? '').trim() === '') return null;
+  const payload = {
+    kind: latest.kind,
+    title: latest.title,
+    description: latest.description,
+    deadline: latest.deadline,
+    status: latest.status,
+    workType: latest.kind === 'assignment' ? latest.work_type : null
+  };
+  if (hasOwn(draft, 'title')) payload.title = draft.title;
+  if (hasOwn(draft, 'description')) payload.description = draft.description;
+  if (hasOwn(draft, 'deadline')) payload.deadline = draft.deadline;
+  if (hasOwn(draft, 'status')) payload.status = draft.status;
+  if (latest.kind === 'assignment' && hasOwn(draft, 'workType')) payload.workType = draft.workType;
+  return payload;
+}
+
+async function submitAssistant(options = {}) {
+  if (state.assistant.loading || state.assistant.executing) return;
+  const text = state.assistant.input;
+  if (text.trim() === '') {
+    state.assistant.error = { code: 'invalid_input', message: '请输入要处理的内容', retryable: false };
+    renderAssistant();
+    renderAssistantControls();
+    return;
+  }
+  if (text.trim().length > ASSISTANT_INPUT_MAX_LENGTH) {
+    state.assistant.error = { code: 'invalid_input', message: `内容超过 ${ASSISTANT_INPUT_MAX_LENGTH} 字符，请精简后再提交`, retryable: false };
+    renderAssistant();
+    renderAssistantControls();
+    return;
+  }
+  if (state.assistant.view && state.assistant.dirty) {
+    const confirmed = await askConfirmation('替换当前预览？', '当前预览中的修改与勾选将丢失。', '替换');
+    if (!confirmed || state.currentPage !== 'assistant') return;
+  }
+  const seq = ++state.assistant.seq;
+  state.assistant.loading = true;
+  state.assistant.view = null;
+  state.assistant.dirty = false;
+  state.assistant.error = null;
+  renderAssistant();
+  renderAssistantControls();
+  let result;
+  try {
+    result = await api.assistant.parse(text);
+  } catch {
+    result = { ok: false, code: 'unknown', message: '处理失败，请重试', retryable: true };
+  }
+  if (seq !== state.assistant.seq || state.currentPage !== 'assistant') return;
+  state.assistant.loading = false;
+  if (!result || result.ok === false) {
+    const error = result || {};
+    state.assistant.view = null;
+    state.assistant.error = {
+      code: error.code || 'unknown',
+      message: error.message || '处理失败，请重试',
+      retryable: Boolean(error.retryable)
+    };
+    if (state.assistant.error.code === 'not_configured') {
+      state.ai.configured = false;
+      renderAssistantConfigWarning();
+    }
+  } else {
+    state.assistant.error = null;
+    state.assistant.view = normalizeAssistantView(result);
+    state.assistant.dirty = false;
+  }
+  renderAssistant();
+  renderAssistantControls();
+}
+
+function takeAssistantSnapshot() {
+  if (state.assistant.loading || state.assistant.executing) return null;
+  const view = state.assistant.view;
+  if (!view) return null;
+  const batchSeq = state.assistant.seq;
+  if (view.intent === 'create') {
+    const candidates = view.create.candidates
+      .filter(candidate => !candidate.removed && candidate.selected && isCreateCandidateExecutable(candidate))
+      .map(candidate => ({ ...candidate }));
+    if (!candidates.length) return null;
+    return { intent: 'create', candidates, count: candidates.length, batchSeq };
+  }
+  if (view.intent === 'update') {
+    const applyToId = view.update.applyToId;
+    const baseline = view.update.targets.find(target => target.id === applyToId);
+    const draft = view.update.draft;
+    if (applyToId === null || !baseline || !draft) return null;
+    return { intent: 'update', applyToId, baseline: { ...baseline }, draft: { ...draft }, count: 1, batchSeq };
+  }
+  if (view.intent === 'delete') {
+    const targets = view.delete.targets.filter(target => target.selected).map(target => ({ ...target }));
+    if (!targets.length) return null;
+    return { intent: 'delete', targets, count: targets.length, batchSeq };
+  }
+  if (view.intent === 'cleanup') {
+    const targets = view.cleanup.targets.filter(target => target.selected).map(target => ({ ...target }));
+    if (!targets.length || !view.cleanup.range) return null;
+    return {
+      intent: 'cleanup',
+      targets,
+      count: targets.length,
+      range: { ...view.cleanup.range },
+      rangeLabel: view.cleanup.rangeLabel,
+      batchSeq
+    };
+  }
+  return null;
+}
+
+async function runAssistantBatch(snapshot, runRows) {
+  state.assistant.loading = true;
+  state.assistant.executing = true;
+  renderAssistant();
+  renderAssistantControls();
+  let latest = null;
+  try {
+    latest = await api.items.list();
+  } catch {
+    latest = null;
+  }
+  if (latest === null) {
+    state.assistant.executing = false;
+    state.assistant.loading = false;
+    showToast('无法读取最新数据，请重试', true);
+    renderAssistant();
+    renderAssistantControls();
+    return;
+  }
+  let outcome = null;
+  try {
+    outcome = await runRows(latest);
+    await refreshItems();
+  } catch {
+    outcome = null;
+  } finally {
+    state.assistant.executing = false;
+    state.assistant.loading = false;
+  }
+  if (outcome === null) {
+    showToast('处理失败，请重试', true);
+    if (state.currentPage === 'assistant') {
+      renderAssistant();
+      renderAssistantControls();
+    }
+    return;
+  }
+  if (state.currentPage !== 'assistant') return;
+  if (state.assistant.seq === snapshot.batchSeq) {
+    state.assistant.view = null;
+    state.assistant.error = null;
+    state.assistant.dirty = false;
+    pushAssistantRecord({ time: assistantTimeLabel(), intent: snapshot.intent, summary: outcome.summary, details: outcome.details });
+  }
+  renderAssistant();
+  renderAssistantControls();
+}
+
+async function executeAssistantCreate() {
+  const snapshot = takeAssistantSnapshot();
+  if (!snapshot || snapshot.intent !== 'create') return;
+  await runAssistantBatch(snapshot, async () => {
+    let success = 0;
+    let fail = 0;
+    const details = [];
+    for (const candidate of snapshot.candidates) {
+      const payload = createPayloadOf(candidate);
+      try {
+        await api.items.create(payload);
+        success += 1;
+        details.push(`已新增「${payload.title}」`);
+      } catch (error) {
+        fail += 1;
+        details.push(`新增「${payload.title}」失败：${error?.message || ''}`);
+      }
+    }
+    return { summary: `新增 ${snapshot.count} 条（成功 ${success}，失败 ${fail}）`, details };
+  });
+}
+
+async function executeAssistantUpdate() {
+  const snapshot = takeAssistantSnapshot();
+  if (!snapshot || snapshot.intent !== 'update') return;
+  await runAssistantBatch(snapshot, async latest => {
+    let success = 0;
+    let fail = 0;
+    const details = [];
+    const baseline = snapshot.baseline;
+    const failDetail = message => { fail += 1; details.push(message); };
+    const latestItem = latest.find(item => item.id === snapshot.applyToId);
+    if (!latestItem
+      || latestItem.kind !== baseline.kind
+      || latestItem.title !== baseline.title
+      || latestItem.deadline !== baseline.deadline
+      || latestItem.status !== baseline.status) {
+      failDetail(`「${baseline.title}」已在其他入口被修改，请重新提交`);
+    } else if (snapshot.draft.deadlineInvalid) {
+      failDetail('请先补全截止时间');
+    } else if (hasOwn(snapshot.draft, 'status') && (snapshot.draft.status === null || snapshot.draft.statusInvalid)) {
+      failDetail('请先为所选项选择有效状态');
+    } else {
+      const payload = updatePayloadOf(latestItem, snapshot.draft);
+      if (payload === null) failDetail('标题不能为空');
+      else if (!assistantDraftDiffers(latestItem, snapshot.draft)) failDetail('没有可执行的修改');
+      else {
+        try {
+          await api.items.update(snapshot.applyToId, payload);
+          success += 1;
+          details.push(`已保存「${payload.title}」的修改`);
+        } catch (error) {
+          failDetail(`修改「${baseline.title}」失败：${error?.message || ''}`);
+        }
+      }
+    }
+    return { summary: `修改 1 条（成功 ${success}，失败 ${fail}）`, details };
+  });
+}
+
+async function executeAssistantDelete(mode) {
+  const snapshot = takeAssistantSnapshot();
+  if (!snapshot) return;
+  if (mode === 'cleanup' ? snapshot.intent !== 'cleanup' : snapshot.intent !== 'delete') return;
+  const confirmed = await askConfirmation(
+    `永久删除 ${snapshot.count} 个事项？`,
+    `将永久删除 ${snapshot.count} 个事项及其全部附件，删除后无法恢复。`,
+    '永久删除'
+  );
+  if (!confirmed) return;
+  await runAssistantBatch(snapshot, async latest => {
+    let success = 0;
+    let skip = 0;
+    let fail = 0;
+    const details = [];
+    for (const target of snapshot.targets) {
+      const latestItem = latest.find(item => item.id === target.id);
+      if (!latestItem) {
+        skip += 1;
+        details.push(`「${target.title}」已不存在（跳过）`);
+        continue;
+      }
+      if (snapshot.intent === 'cleanup') {
+        if (latestItem.status !== 'completed') {
+          skip += 1;
+          details.push(`「${target.title}」状态已变化，跳过`);
+          continue;
+        }
+        const datePart = String(latestItem.deadline).slice(0, 10);
+        if (datePart < snapshot.range.start || datePart > snapshot.range.end) {
+          skip += 1;
+          details.push(`「${target.title}」截止时间已不在范围内，跳过`);
+          continue;
+        }
+      }
+      try {
+        await api.items.remove(target.id);
+        success += 1;
+        details.push(`已永久删除「${target.title}」`);
+      } catch (error) {
+        if (String(error?.message || '').includes('事项不存在')) {
+          skip += 1;
+          details.push(`「${target.title}」已不存在（跳过）`);
+        } else {
+          fail += 1;
+          details.push(`删除「${target.title}」失败：${error?.message || ''}`);
+        }
+      }
+    }
+    return { summary: `删除 ${snapshot.count} 条（成功 ${success}，跳过 ${skip}，失败 ${fail}）`, details };
+  });
+}
+
+function pushAssistantRecord(record) {
+  state.assistant.records.push(record);
+  renderAssistantRecords();
+}
+
+function assistantSetCreateDeadline(candidate, row) {
+  const dateInput = row.querySelector('[data-assistant-field="deadlineDate"]');
+  const timeInput = row.querySelector('[data-assistant-field="deadlineTime"]');
+  candidate.deadline = joinAssistantDeadline(dateInput ? dateInput.value : '', timeInput ? timeInput.value : '');
+  candidate.deadlineIssue = candidate.deadline === null ? 'missing' : null;
+  candidate.expired = candidate.deadlineIssue === null && parseDate(candidate.deadline) < new Date();
+}
+
+function assistantAutoSelectCandidate(candidate, wasExecutable) {
+  if (!wasExecutable && isCreateCandidateExecutable(candidate) && candidate.duplicate === null) candidate.selected = true;
+}
+
+function assistantApplyCreateKind(candidate, kind) {
+  candidate.kind = kind;
+  if (!isAssistantStatusAllowed(kind, candidate.status)) {
+    candidate.status = assistantDefaultStatus(kind);
+    candidate.statusAdjusted = true;
+    candidate.statusInvalid = false;
+  } else {
+    candidate.statusAdjusted = false;
+    candidate.statusInvalid = false;
+  }
+  if (kind === 'activity') candidate.workType = null;
+  else if (candidate.workType === null) candidate.workType = 'personal';
+  candidate.expired = candidate.deadlineIssue === null && parseDate(candidate.deadline) < new Date();
+}
+
+function assistantMarkDirty() {
+  state.assistant.dirty = true;
+}
+
+function assistantRowOf(view, element) {
+  const createRow = element.closest('.assistant-row[data-row-id]');
+  if (createRow && view.intent === 'create') {
+    return view.create.candidates.find(candidate => candidate.rowId === createRow.dataset.rowId) || null;
+  }
+  const targetRow = element.closest('.assistant-row[data-target-id]');
+  if (targetRow && (view.intent === 'delete' || view.intent === 'cleanup')) {
+    const plan = view.intent === 'delete' ? view.delete : view.cleanup;
+    return plan.targets.find(target => target.id === Number(targetRow.dataset.targetId)) || null;
+  }
+  return null;
+}
+
+function assistantHandleInput(event) {
+  const view = state.assistant.view;
+  if (!view) return;
+  const field = event.target.dataset.assistantField;
+  if (!field) return;
+  if (view.intent === 'create') {
+    const createRow = event.target.closest('.assistant-row[data-row-id]');
+    if (!createRow) return;
+    const candidate = view.create.candidates.find(item => item.rowId === createRow.dataset.rowId);
+    if (!candidate) return;
+    if (field === 'title') {
+      candidate.title = event.target.value;
+      candidate.titleTooLong = String(candidate.title).trim().length > ASSISTANT_TITLE_MAX_LENGTH;
+      assistantMarkDirty();
+      renderAssistantControls();
+      return;
+    }
+    if (field === 'description') {
+      candidate.description = event.target.value;
+      assistantMarkDirty();
+      renderAssistantControls();
+      return;
+    }
+    if (field === 'deadlineDate' || field === 'deadlineTime') {
+      const wasExecutable = isCreateCandidateExecutable(candidate);
+      assistantSetCreateDeadline(candidate, createRow);
+      assistantAutoSelectCandidate(candidate, wasExecutable);
+      assistantMarkDirty();
+      renderAssistant();
+      renderAssistantControls();
+    }
+    return;
+  }
+  if (view.intent === 'update') {
+    const plan = view.update;
+    const draft = plan.draft;
+    const target = plan.targets.find(item => item.id === plan.applyToId);
+    if (!draft || !target) return;
+    if (field === 'title') {
+      draft.title = event.target.value;
+      draft.titleTooLong = String(draft.title ?? '').trim().length > ASSISTANT_TITLE_MAX_LENGTH;
+      assistantMarkDirty();
+      renderAssistantControls();
+      return;
+    }
+    if (field === 'description') {
+      draft.description = event.target.value;
+      assistantMarkDirty();
+      renderAssistantControls();
+      return;
+    }
+    if (field === 'deadlineDate' || field === 'deadlineTime') {
+      const diff = event.target.closest('.assistant-diff');
+      const dateInput = diff ? diff.querySelector('[data-assistant-field="deadlineDate"]') : null;
+      const timeInput = diff ? diff.querySelector('[data-assistant-field="deadlineTime"]') : null;
+      draft.deadline = joinAssistantDeadline(dateInput ? dateInput.value : '', timeInput ? timeInput.value : '');
+      draft.deadlineInvalid = draft.deadline === null;
+      assistantMarkDirty();
+      renderAssistantControls();
+    }
+  }
+}
+
+function assistantHandleChange(event) {
+  const view = state.assistant.view;
+  if (!view) return;
+  if (event.target.dataset.assistantAction === 'pick-target') {
+    const plan = view.update;
+    if (!plan) return;
+    plan.applyToId = Number(event.target.value);
+    const target = plan.targets.find(item => item.id === plan.applyToId);
+    plan.draft = target ? initializeUpdateDraft(plan, target) : null;
+    assistantMarkDirty();
+    renderAssistant();
+    renderAssistantControls();
+    return;
+  }
+  const field = event.target.dataset.assistantField;
+  if (!field) return;
+  if (view.intent === 'create') {
+    const createRow = event.target.closest('.assistant-row[data-row-id]');
+    if (!createRow) return;
+    const candidate = view.create.candidates.find(item => item.rowId === createRow.dataset.rowId);
+    if (!candidate) return;
+    if (field === 'selected') {
+      candidate.selected = event.target.checked;
+      assistantMarkDirty();
+      renderAssistant();
+      renderAssistantControls();
+      return;
+    }
+    if (field === 'kind') {
+      const wasExecutable = isCreateCandidateExecutable(candidate);
+      assistantApplyCreateKind(candidate, event.target.value);
+      assistantAutoSelectCandidate(candidate, wasExecutable);
+      assistantMarkDirty();
+      renderAssistant();
+      renderAssistantControls();
+      return;
+    }
+    if (field === 'status') {
+      candidate.status = event.target.value === '' ? null : event.target.value;
+      candidate.statusInvalid = false;
+      candidate.statusAdjusted = false;
+      assistantMarkDirty();
+      renderAssistant();
+      renderAssistantControls();
+      return;
+    }
+    if (field === 'workType') {
+      candidate.workType = event.target.value;
+      assistantMarkDirty();
+      renderAssistantControls();
+      return;
+    }
+    if (field === 'title') {
+      candidate.title = event.target.value;
+      candidate.titleTooLong = String(candidate.title).trim().length > ASSISTANT_TITLE_MAX_LENGTH;
+      assistantMarkDirty();
+      renderAssistant();
+      renderAssistantControls();
+      return;
+    }
+    if (field === 'deadlineDate' || field === 'deadlineTime') {
+      const wasExecutable = isCreateCandidateExecutable(candidate);
+      assistantSetCreateDeadline(candidate, createRow);
+      assistantAutoSelectCandidate(candidate, wasExecutable);
+      assistantMarkDirty();
+      renderAssistant();
+      renderAssistantControls();
+      return;
+    }
+    if (field === 'description') {
+      candidate.description = event.target.value;
+      assistantMarkDirty();
+      renderAssistantControls();
+    }
+    return;
+  }
+  if (view.intent === 'delete' || view.intent === 'cleanup') {
+    const targetRow = event.target.closest('.assistant-row[data-target-id]');
+    if (!targetRow || field !== 'selected') return;
+    const plan = view.intent === 'delete' ? view.delete : view.cleanup;
+    const target = plan.targets.find(item => item.id === Number(targetRow.dataset.targetId));
+    if (!target) return;
+    target.selected = event.target.checked;
+    assistantMarkDirty();
+    renderAssistant();
+    renderAssistantControls();
+    return;
+  }
+  if (view.intent === 'update') {
+    const plan = view.update;
+    const draft = plan.draft;
+    const target = plan.targets.find(item => item.id === plan.applyToId);
+    if (!draft || !target) return;
+    if (field === 'status') {
+      draft.status = event.target.value === '' ? null : event.target.value;
+      draft.statusInvalid = !isAssistantStatusAllowed(target.kind, draft.status);
+      assistantMarkDirty();
+      renderAssistant();
+      renderAssistantControls();
+      return;
+    }
+    if (field === 'workType') {
+      draft.workType = event.target.value;
+      assistantMarkDirty();
+      renderAssistantControls();
+      return;
+    }
+    if (field === 'title') {
+      draft.title = event.target.value;
+      draft.titleTooLong = String(draft.title ?? '').trim().length > ASSISTANT_TITLE_MAX_LENGTH;
+      assistantMarkDirty();
+      renderAssistantControls();
+    }
+  }
+}
+
+function assistantHandleResultClick(event) {
+  const actionButton = event.target.closest('[data-assistant-action]');
+  if (!actionButton) return;
+  const action = actionButton.dataset.assistantAction;
+  if (action === 'remove-row') {
+    const view = state.assistant.view;
+    const rowId = actionButton.dataset.rowId;
+    const candidate = view && view.intent === 'create'
+      ? view.create.candidates.find(item => item.rowId === rowId)
+      : null;
+    if (!candidate) return;
+    candidate.removed = true;
+    candidate.selected = false;
+    assistantMarkDirty();
+    renderAssistant();
+    renderAssistantControls();
+    return;
+  }
+  if (action === 'write-create') {
+    executeAssistantCreate();
+    return;
+  }
+  if (action === 'save-update') {
+    executeAssistantUpdate();
+    return;
+  }
+  if (action === 'delete') {
+    executeAssistantDelete(state.assistant.view?.intent === 'cleanup' ? 'cleanup' : 'delete');
+    return;
+  }
+  if (action === 'go-settings') switchPage('settings');
 }
 
 // ---------- 日常任务 ----------
@@ -1111,6 +2103,41 @@ async function handleItemAction(button) {
   }
 }
 
+function renderAiSettings() {
+  $('#aiEndpointInput').value = state.ai.endpoint || '';
+  $('#aiModelInput').value = state.ai.model || '';
+  $('#aiKeyMask').textContent = state.ai.keyMask ? `已保存（${state.ai.keyMask}）` : '未设置';
+  $('#aiKeyField').classList.toggle('hidden', !state.ai.editingKey);
+  $('#aiKeyInput').value = '';
+  const ready = Boolean(state.ai.configured);
+  const status = $('#aiSettingsStatus');
+  status.dataset.aiStatus = ready ? 'ready' : 'missing';
+  status.textContent = ready ? '配置完整，助手页可用' : '配置不完整，助手功能不可用';
+}
+
+async function saveAiSettings() {
+  const endpoint = $('#aiEndpointInput').value.trim();
+  const model = $('#aiModelInput').value.trim();
+  const apiKey = state.ai.editingKey ? $('#aiKeyInput').value.trim() : '';
+  const payload = { endpoint, model };
+  if (apiKey) payload.apiKey = apiKey;
+  let result;
+  try {
+    result = await api.settings.saveAi(payload);
+  } catch {
+    showToast('保存失败，请重试', true);
+    return;
+  }
+  if (!result || !result.ok) {
+    showToast((result && result.message) || '保存失败，请重试', true);
+    return;
+  }
+  state.ai = { ...result.ai, editingKey: false };
+  renderAiSettings();
+  renderAssistantConfigWarning();
+  showToast('AI 配置已保存');
+}
+
 async function initializeSettings() {
   const settings = await execute(() => api.settings.get());
   if (!settings) return;
@@ -1119,6 +2146,11 @@ async function initializeSettings() {
   $('#widgetToggle').checked = settings.widgetEnabled !== false;
   $('#dataPath').textContent = settings.dataPath;
   $('#notificationSummary').textContent = settings.notificationsEnabled ? '应用在托盘运行时会检查到期事项。' : '系统通知当前已关闭。';
+  state.ai = settings.ai
+    ? { ...settings.ai, editingKey: false }
+    : { configured: false, endpoint: '', model: '', keyMask: '', editingKey: false };
+  renderAiSettings();
+  if (state.currentPage === 'assistant') renderAssistantConfigWarning();
 }
 
 function bindEvents() {
@@ -1256,6 +2288,13 @@ function bindEvents() {
     const result = await execute(() => api.settings.setWidget(event.target.checked));
     if (result !== null) showToast(event.target.checked ? '桌面小组件已显示' : '桌面小组件已隐藏');
   });
+  $('#aiKeyEditButton').addEventListener('click', () => {
+    if (state.ai.editingKey === true) return;
+    state.ai.editingKey = true;
+    renderAiSettings();
+    $('#aiKeyInput').focus();
+  });
+  $('#aiSettingsSave').addEventListener('click', async () => { await saveAiSettings(); });
   $('#backupButton').addEventListener('click', async () => {
     const path = await execute(() => api.data.backup());
     if (path) showToast(`备份已保存：${path}`);
@@ -1264,7 +2303,13 @@ function bindEvents() {
     const confirmed = await askConfirmation('从备份恢复？', '恢复会覆盖当前全部事项、附件和日记。建议先导出当前数据备份。', '选择备份');
     if (!confirmed) return;
     const restored = await execute(() => api.data.restore());
-    if (restored) { showToast('备份已恢复'); state.diaryDates = new Set(); await Promise.all([refreshItems(), refreshHabits()]); }
+    if (restored) {
+      showToast('备份已恢复');
+      state.diaryDates = new Set();
+      await Promise.all([refreshItems(), refreshHabits()]);
+      await refreshAssistantConfig();
+      renderAiSettings();
+    }
   });
   $('#clearDataButton').addEventListener('click', async () => {
     const first = await askConfirmation('清空全部数据？', '所有事项、附件和日记将被永久删除。此操作无法撤销。', '继续');
@@ -1305,6 +2350,19 @@ function bindEvents() {
     }
     renderDiaryCalendar();
   });
+
+  $('#assistantInput').addEventListener('input', event => {
+    state.assistant.input = event.target.value;
+    const counter = $('#assistantCounter');
+    counter.textContent = `${state.assistant.input.length} / ${ASSISTANT_INPUT_MAX_LENGTH}`;
+    counter.classList.toggle('over', state.assistant.input.length > ASSISTANT_INPUT_MAX_LENGTH);
+  });
+  $('#assistantSubmit').addEventListener('click', () => submitAssistant());
+  $('#assistantRetry').addEventListener('click', () => submitAssistant({ retry: true }));
+  $('#assistantGoSettings').addEventListener('click', () => switchPage('settings'));
+  $('#assistantResult').addEventListener('click', assistantHandleResultClick);
+  $('#assistantResult').addEventListener('change', assistantHandleChange);
+  $('#assistantResult').addEventListener('input', assistantHandleInput);
 
   $('#newHabitButton').addEventListener('click', () => openHabitModal());
   $('#habitForm').addEventListener('submit', saveHabit);

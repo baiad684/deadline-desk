@@ -36,6 +36,9 @@ contextBridge.exposeInMainWorld('deadlineDesk', {
     restore: () => ipcRenderer.invoke('data:restore'),
     clear: () => ipcRenderer.invoke('data:clear')
   },
+  assistant: {
+    parse: input => ipcRenderer.invoke('assistant:parse', input)
+  },
   widget: {
     getData: () => ipcRenderer.invoke('widget:get'),
     setPinned: pinned => ipcRenderer.invoke('widget:set-pinned', pinned),
@@ -52,6 +55,7 @@ contextBridge.exposeInMainWorld('deadlineDesk', {
     get: () => ipcRenderer.invoke('settings:get'),
     setNotifications: enabled => ipcRenderer.invoke('settings:set-notifications', enabled),
     setWidget: enabled => ipcRenderer.invoke('settings:set-widget', enabled),
-    showDataFolder: () => ipcRenderer.invoke('app:show-data-folder')
+    showDataFolder: () => ipcRenderer.invoke('app:show-data-folder'),
+    saveAi: input => ipcRenderer.invoke('settings:set-ai', input)
   }
 });
