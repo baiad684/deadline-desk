@@ -2813,6 +2813,10 @@ describe('助手后端单元测试（detail_v1）', () => {
       assert.deepEqual(plain(result.cleanup.targets), []);
       assert.equal(result.message, '没有符合条件的已完成事项。');
       assert.equal(result.cleanup.rangeLabel, h.fn('resolveRange')({ type: 'next_month' }, h.now()).label);
+      assert.deepEqual(
+        plain(result.cleanup.range),
+        plain((({ start, end }) => ({ start, end }))(h.fn('resolveRange')({ type: 'next_month' }, h.now())))
+      );
     });
 
     test('F15.2 无范围 / 非法范围：clarify 且无 cleanup', () => {
@@ -2832,7 +2836,165 @@ describe('助手后端单元测试（detail_v1）', () => {
       const result = cleanupPlan({ message: '清理全部', cleanup: { range: { type: 'all' } } }, cleanupItems());
       assert.deepEqual(plain(result.cleanup.targets.map(target => target.id)), [1, 4, 3]);
       assert.equal(result.cleanup.rangeLabel, '全部时间');
+      assert.deepEqual(plain(result.cleanup.range), { start: '0000-01-01', end: '9999-12-31' });
       assert.equal(result.message, '清理全部');
+    });
+
+    test('F15.2 range 与 rangeLabel 同源（last_month）', () => {
+      const result = cleanupPlan({ cleanup: { range: { type: 'last_month' } } }, cleanupItems());
+      const expected = h.fn('resolveRange')({ type: 'last_month' }, h.now());
+      assert.equal(result.cleanup.range.start, expected.start);
+      assert.equal(result.cleanup.range.end, expected.end);
+      assert.equal(result.cleanup.rangeLabel, expected.label);
+    });
+  });
+
+  // ============ F28 清理计划返回范围边界（v3） ============
+
+  describe('F28 清理计划返回范围边界（cleanup.range）', () => {
+    const cleanupPlan = (payload, allItems, overrides) => h.fn('normalizeCleanupPlan')(planOptions(payload, allItems, overrides));
+    const fixedNow = () => h.date(2026, 11, 7, 12, 0);
+    const resolve = (range, now = fixedNow()) => h.fn('resolveRange')(range, now, { allowAll: true });
+
+    test('F28.1 cleanup.range：各范围类型与 resolveRange 同源，且只含 start/end', () => {
+      const now = fixedNow();
+      const cases = [
+        [{ type: 'this_week' }, { start: '2026-11-02', end: '2026-11-08' }],
+        [{ type: 'next_week' }, { start: '2026-11-09', end: '2026-11-15' }],
+        [{ type: 'last_week' }, { start: '2026-10-26', end: '2026-11-01' }],
+        [{ type: 'this_month' }, { start: '2026-11-01', end: '2026-11-30' }],
+        [{ type: 'next_month' }, { start: '2026-12-01', end: '2026-12-31' }],
+        [{ type: 'last_month' }, { start: '2026-10-01', end: '2026-10-31' }],
+        [{ type: 'this_year' }, { start: '2026-01-01', end: '2026-12-31' }],
+        [{ type: 'last_year' }, { start: '2025-01-01', end: '2025-12-31' }],
+        [{ type: 'month', year: 2024, month: 2 }, { start: '2024-02-01', end: '2024-02-29' }],
+        [{ type: 'week', date: '2026-11-04' }, { start: '2026-11-02', end: '2026-11-08' }],
+        [{ type: 'custom', start: '2026-01-05', end: '2026-03-09' }, { start: '2026-01-05', end: '2026-03-09' }],
+        [{ type: 'all' }, { start: '0000-01-01', end: '9999-12-31' }]
+      ];
+      for (const [range, expected] of cases) {
+        const result = cleanupPlan({ cleanup: { range } }, [], { now });
+        assert.equal(result.intent, 'cleanup', `${JSON.stringify(range)} 应返回 cleanup`);
+        assert.deepEqual(plain(result.cleanup.range), expected, `${JSON.stringify(range)} 的 range 不正确`);
+        assert.equal(result.cleanup.rangeLabel, resolve(range, now).label, `${JSON.stringify(range)} 的 rangeLabel 与 resolveRange 不一致`);
+        assert.deepEqual(Object.keys(result.cleanup.range), ['start', 'end'], `${JSON.stringify(range)} 的 range 只能含 start/end`);
+        assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(result.cleanup.range.start));
+        assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(result.cleanup.range.end));
+      }
+    });
+
+    test('F28.1 cleanup.range：过滤以 range 为闭区间，首尾命中、越界排除', () => {
+      const now = fixedNow();
+      const items = [
+        assistantRow(1, { title: '首日零点', deadline: '2026-11-01 00:00', status: 'completed' }),
+        assistantRow(2, { title: '末日末刻', deadline: '2026-11-30 23:59', status: 'completed' }),
+        assistantRow(3, { title: '前一日', deadline: '2026-10-31 23:59', status: 'completed' }),
+        assistantRow(4, { title: '后一日', deadline: '2026-12-01 00:00', status: 'completed' }),
+        assistantRow(5, { title: '范围内未完成', deadline: '2026-11-15 09:00', status: 'not_started' })
+      ];
+      const result = cleanupPlan({ cleanup: { range: { type: 'this_month' } } }, items, { now });
+      assert.deepEqual(plain(result.cleanup.range), { start: '2026-11-01', end: '2026-11-30' });
+      assert.deepEqual(plain(result.cleanup.targets.map(target => target.id)), [1, 2]);
+    });
+
+    test('F28.1 cleanup.range：空结果与非空结果共用同一范围来源', () => {
+      const now = fixedNow();
+      const range = { type: 'this_month' };
+      const empty = cleanupPlan(
+        { message: '清理本月', cleanup: { range } },
+        [assistantRow(3, { title: '上月完成', deadline: '2026-10-20 09:00', status: 'completed' })],
+        { now }
+      );
+      const filled = cleanupPlan(
+        { message: '清理本月', cleanup: { range } },
+        [assistantRow(1, { title: '本月完成', deadline: '2026-11-05 09:00', status: 'completed' })],
+        { now }
+      );
+      assert.deepEqual(plain(empty.cleanup.targets), []);
+      assert.equal(empty.message, '没有符合条件的已完成事项。');
+      assert.equal(filled.message, '清理本月');
+      assert.deepEqual(plain(empty.cleanup.range), plain(filled.cleanup.range));
+      assert.equal(empty.cleanup.rangeLabel, filled.cleanup.rangeLabel);
+    });
+
+    test('F28.1 cleanup.range：all 固定全区间，非法范围走 clarify 且无 cleanup/range', () => {
+      const now = fixedNow();
+      const all = cleanupPlan({ cleanup: { range: { type: 'all' } } }, [], { now });
+      assert.equal(all.intent, 'cleanup');
+      assert.deepEqual(plain(all.cleanup.range), { start: '0000-01-01', end: '9999-12-31' });
+      assert.equal(all.cleanup.rangeLabel, '全部时间');
+      assert.equal(all.message, '没有符合条件的已完成事项。');
+
+      for (const cleanup of [
+        {},
+        { range: null },
+        { range: {} },
+        { range: { type: 'unknown' } },
+        { range: { type: 'week' } },
+        { range: { type: 'month', year: 2026, month: 13 } },
+        { range: { type: 'custom', start: '2026-02-31', end: '2026-03-01' } }
+      ]) {
+        const result = cleanupPlan({ cleanup }, [], { now });
+        assert.equal(result.intent, 'clarify', `${JSON.stringify(cleanup)} 应返回 clarify`);
+        assert.equal(result.cleanup, undefined);
+        assert.equal(Object.prototype.hasOwnProperty.call(result, 'range'), false);
+      }
+    });
+
+    test('F28.1 cleanup 对象字段顺序：targets → rangeLabel → range（仅追加）', () => {
+      const now = fixedNow();
+      const result = cleanupPlan(
+        { cleanup: { range: { type: 'this_month' } } },
+        [assistantRow(1, { title: '本月完成', deadline: '2026-11-05 09:00', status: 'completed' })],
+        { now }
+      );
+      assert.deepEqual(Object.keys(result.cleanup), ['targets', 'rangeLabel', 'range']);
+      assert.deepEqual(Object.keys(result.cleanup.range), ['start', 'end']);
+      assert.equal(result.ok, true);
+      assert.equal(result.intent, 'cleanup');
+      assert.equal(result.omittedCount, 0);
+    });
+
+    test('F28.1 cleanup.range：custom 起止倒序归一化为正序并用于过滤', () => {
+      const now = fixedNow();
+      const items = [
+        assistantRow(1, { title: '较晚完成', deadline: '2026-03-09 00:00', status: 'completed' }),
+        assistantRow(2, { title: '较早完成', deadline: '2026-01-05 23:59', status: 'completed' }),
+        assistantRow(3, { title: '越界完成', deadline: '2026-01-04 23:59', status: 'completed' })
+      ];
+      const result = cleanupPlan({ cleanup: { range: { type: 'custom', start: '2026-03-09', end: '2026-01-05' } } }, items, { now });
+      assert.deepEqual(plain(result.cleanup.range), { start: '2026-01-05', end: '2026-03-09' });
+      assert.deepEqual(plain(result.cleanup.targets.map(target => target.id)), [2, 1]);
+    });
+
+    test('F28.3 assistant:parse：cleanup 响应带 range，其他意图不带 range', async () => {
+      h.setDatabase(configuredDatabase({
+        items: [assistantRow(1, { title: '上月已完成作业', deadline: monthDate(-1, 10, '09:00'), status: 'completed' })]
+      }));
+      h.setFetch(() => Promise.resolve(chatEnvelope(JSON.stringify({
+        intent: 'cleanup',
+        message: '清理上月',
+        cleanup: { range: { type: 'last_month' } }
+      }))));
+      const result = await h.parse('清理上个月');
+      const expected = resolve({ type: 'last_month' }, h.now());
+      assert.equal(result.intent, 'cleanup');
+      assert.deepEqual(plain(result.cleanup.range), { start: expected.start, end: expected.end });
+      assert.equal(result.cleanup.rangeLabel, expected.label);
+      assert.deepEqual(plain(result.cleanup.targets.map(target => target.id)), [1]);
+
+      const others = [
+        [{ intent: 'create', create: { candidates: [{ title: '新事项', kind: 'assignment', deadline: `${localDate(5)} 23:59`, status: 'not_started' }] } }, 'create'],
+        [{ intent: 'update', update: { targetIds: [1], changes: { title: '新标题' } } }, 'update'],
+        [{ intent: 'delete', delete: { targetIds: [1] } }, 'delete']
+      ];
+      for (const [payload, intent] of others) {
+        h.setFetch(() => Promise.resolve(chatEnvelope(JSON.stringify(payload))));
+        const other = await h.parse(`其他意图 ${intent}`);
+        assert.equal(other.intent, intent);
+        assert.equal(Object.prototype.hasOwnProperty.call(other[intent], 'range'), false);
+        assert.equal(Object.prototype.hasOwnProperty.call(other, 'range'), false);
+      }
     });
   });
 
@@ -3177,6 +3339,78 @@ describe('助手后端单元测试（detail_v1）', () => {
       assert.deepEqual(invocations[1], ['assistant:parse', null]);
       await api.settings.saveAi({ weird: true });
       assert.deepEqual(invocations[2], ['settings:set-ai', { weird: true }]);
+    });
+  });
+
+  // ============ F19 助手页 DOM 契约（v3） ============
+
+  describe('F19 助手页 DOM 契约', () => {
+    const html = fs.readFileSync(path.join(projectDir, 'src/index.html'), 'utf8');
+    const sidebarBottom = html.slice(html.indexOf('<div class="sidebar-bottom">'), html.indexOf('</aside>'));
+    const assistantStart = html.indexOf('<section class="page" data-page-view="assistant">');
+    const settingsStart = html.indexOf('<section class="page" data-page-view="settings">');
+    const assistantBlock = html.slice(assistantStart, settingsStart);
+    const tagOf = id => {
+      const match = assistantBlock.match(new RegExp(`<[a-z]+[^>]*\\bid="${id}"[^>]*>`));
+      assert.ok(match, `助手页缺少 #${id}`);
+      return match[0];
+    };
+
+    test('F19.1 侧边栏：助手导航位于设置之上，无角标且文案为「助手」', () => {
+      const pages = [...sidebarBottom.matchAll(/<button class="nav-item" data-page="([a-z]+)"/g)].map(match => match[1]);
+      assert.deepEqual(pages, ['assistant', 'settings']);
+      const assistantNav = sidebarBottom.match(/<button class="nav-item" data-page="assistant">([\s\S]*?)<\/button>/)[1];
+      assert.ok(assistantNav.includes('data-icon="assistant"'));
+      assert.ok(assistantNav.includes('助手'));
+      assert.ok(!assistantNav.includes('nav-count'), '助手导航不应带角标');
+    });
+
+    test('F19.2 助手页位置与骨架：位于设置页之前，关键节点唯一且初始状态符合契约', () => {
+      assert.ok(assistantStart > 0, '缺少助手页容器');
+      assert.ok(settingsStart > assistantStart, '助手页应排在设置页之前');
+
+      const ids = [
+        'assistantConfigWarning', 'assistantGoSettings', 'assistantInput', 'assistantCounter',
+        'assistantSubmit', 'assistantRetry', 'assistantResult', 'assistantRecords'
+      ];
+      for (const id of ids) {
+        const occurrences = assistantBlock.match(new RegExp(`id="${id}"`, 'g')) || [];
+        assert.equal(occurrences.length, 1, `#${id} 应恰好出现一次`);
+      }
+
+      const warningTag = tagOf('assistantConfigWarning');
+      assert.ok(warningTag.includes('role="status"'));
+      assert.ok(warningTag.includes('data-config="pending"'));
+      assert.ok(/\bhidden\b/.test(warningTag));
+
+      const resultTag = tagOf('assistantResult');
+      assert.ok(resultTag.includes('aria-live="polite"'));
+      const recordsTag = tagOf('assistantRecords');
+      assert.ok(/\bhidden\b/.test(recordsTag));
+      const retryTag = tagOf('assistantRetry');
+      assert.ok(/\bhidden\b/.test(retryTag), '重试按钮初始应隐藏');
+
+      const submitContent = assistantBlock.match(/<button class="primary-button" id="assistantSubmit">([\s\S]*?)<\/button>/)[1];
+      assert.ok(submitContent.includes('data-icon="check"'));
+      assert.ok(submitContent.includes('解析'));
+      assert.ok(assistantBlock.includes('>前往设置</button>'));
+    });
+
+    test('F19.2 输入与隐私：输入框无 maxlength、计数初值 0 / 3000、隐私说明含两类字段清单', () => {
+      const inputTag = tagOf('assistantInput');
+      assert.ok(inputTag.startsWith('<textarea'), '#assistantInput 应为 textarea');
+      assert.ok(!inputTag.includes('maxlength'), '输入框不应设 maxlength');
+      assert.ok(assistantBlock.includes('>0 / 3000</span>'));
+
+      const privacy = assistantBlock.match(/<p class="assistant-privacy">([\s\S]*?)<\/p>/)[1];
+      for (const token of ['会发送到你配置的第三方接口', '不会发送', '编号、标题、类型、截止时间、状态', '事项说明、附件文件、日记']) {
+        assert.ok(privacy.includes(token), `隐私说明缺少「${token}」`);
+      }
+    });
+
+    test('F19.3 静态安全：助手页不含内联事件处理器与内联 style', () => {
+      assert.ok(!/\son(?:click|input|change|submit|load|error|focus|blur|keydown|keyup)\s*=/i.test(assistantBlock));
+      assert.ok(!assistantBlock.includes('style="'));
     });
   });
 });

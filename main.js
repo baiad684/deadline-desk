@@ -1628,7 +1628,7 @@ function normalizeCleanupPlan(options) {
       ? AI_CLEANUP_EMPTY_MESSAGE
       : (typeof payload.message === 'string' ? payload.message : ''),
     omittedCount,
-    cleanup: { targets, rangeLabel: range.label }
+    cleanup: { targets, rangeLabel: range.label, range: { start: range.start, end: range.end } }
   };
 }
 

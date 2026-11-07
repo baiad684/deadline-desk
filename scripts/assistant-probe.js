@@ -43,7 +43,18 @@ const CHECK_TITLES = {
   27: '写意图：删除计划与同名歧义',
   28: '写意图：清理范围过滤与空结果',
   29: '写意图：计划阶段零写入',
-  30: '错误映射：400/404/418'
+  30: '错误映射：400/404/418',
+  31: '助手页：导航、结构、隐私与配置提示',
+  32: '新增预览：候选、徽标与默认勾选',
+  33: '新增执行：取消勾选与导航/统计同步',
+  34: '新增预览：待补全、移除与部分写入',
+  35: '修改预览：diff、保存与多目标',
+  36: '删除：永久删除、二次确认与已不存在',
+  37: '清理：范围过滤、确认与空结果',
+  38: '查询：答复、口径与零写入',
+  39: '生命周期：输入保留、离开清空与晚到响应',
+  40: '错误：未配置、可重试与超长拦截',
+  41: '安全：文本转义与替换预览确认'
 };
 
 const passed = new Set();
@@ -66,6 +77,10 @@ function monthDate(offsetMonths, day, time) {
   const now = new Date();
   const date = new Date(now.getFullYear(), now.getMonth() + offsetMonths, day);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${time}`;
+}
+
+function formatYmd(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
 function launchApp() {
@@ -208,6 +223,111 @@ function createMockServer() {
           return sendJson(res, 200, chatCompletion(JSON.stringify({ intent: 'cleanup', cleanup: { range: { type: 'last_month' } } })));
         case 'MOCK_PLAN_CLEANUP_EMPTY':
           return sendJson(res, 200, chatCompletion(JSON.stringify({ intent: 'cleanup', cleanup: { range: { type: 'next_month' } } })));
+        case 'MOCK_UI_CREATE':
+          return sendJson(res, 200, chatCompletion(JSON.stringify({
+            intent: 'create',
+            message: '已整理出候选',
+            create: {
+              candidates: [
+                { title: '数据库课设', kind: 'assignment', deadline: `${localDate(3)} 23:59`, status: 'not_started', workType: 'team' },
+                { title: '校园摄影比赛', kind: 'activity', deadline: `${localDate(2)} 20:00`, status: 'not_completed', workType: null },
+                { title: '补录旧作业', kind: 'assignment', deadline: `${localDate(-3)} 02:00`, status: 'not_started', workType: 'personal' },
+                { title: '缺少时间的作业', kind: 'assignment', deadline: null, status: 'not_started', workType: 'personal' }
+              ],
+              ignored: [{ text: '随手一提', reason: '没有明确标题' }]
+            }
+          })));
+        case 'MOCK_UI_CREATE_MISSING':
+          return sendJson(res, 200, chatCompletion(JSON.stringify({
+            intent: 'create',
+            message: '已整理出候选',
+            create: {
+              candidates: [
+                { title: '助手正常候选', kind: 'assignment', deadline: `${localDate(4)} 23:59`, status: 'not_started', workType: 'personal' },
+                { title: '助手待补全候选', kind: 'assignment', deadline: null, status: 'not_started', workType: 'personal' },
+                { title: '助手移除候选', kind: 'assignment', deadline: null, status: 'not_started', workType: 'personal' }
+              ],
+              ignored: []
+            }
+          })));
+        case 'MOCK_UI_CREATE_BULK': {
+          const candidates = [];
+          for (let index = 0; index < 60; index += 1) {
+            candidates.push({
+              title: `批量候选 ${index + 1}`,
+              kind: 'assignment',
+              deadline: `${localDate(8 + index)} 12:30`,
+              status: 'not_started',
+              workType: 'personal'
+            });
+          }
+          return sendJson(res, 200, chatCompletion(JSON.stringify({ intent: 'create', create: { candidates, ignored: [] } })));
+        }
+        case 'MOCK_UI_XSS':
+          return sendJson(res, 200, chatCompletion(JSON.stringify({
+            intent: 'create',
+            create: {
+              candidates: [{
+                title: '<img src=x onerror="window.__xss=1">X',
+                kind: 'assignment',
+                deadline: `${localDate(4)} 23:59`,
+                status: 'not_started',
+                description: '<script>window.__xss=1</script>',
+                workType: 'personal'
+              }],
+              ignored: []
+            }
+          })));
+        case 'MOCK_UI_UPDATE':
+          return sendJson(res, 200, chatCompletion(JSON.stringify({
+            intent: 'update',
+            message: '已找到目标',
+            update: { targetIds: [2], changes: { deadline: `${localDate(6)} 23:59` } }
+          })));
+        case 'MOCK_UI_UPDATE_MULTI':
+          return sendJson(res, 200, chatCompletion(JSON.stringify({
+            intent: 'update',
+            message: '匹配到多个事项',
+            update: { targetIds: [3, 4], changes: { status: 'completed' } }
+          })));
+        case 'MOCK_UI_UPDATE_STATUS_INVALID':
+          return sendJson(res, 200, chatCompletion(JSON.stringify({
+            intent: 'update',
+            update: { targetIds: [2], changes: { status: 'in_progress' } }
+          })));
+        case 'MOCK_UI_UPDATE_TITLE':
+          return sendJson(res, 200, chatCompletion(JSON.stringify({
+            intent: 'update',
+            update: { targetIds: [1], changes: { title: '数据库课程设计（新）' } }
+          })));
+        case 'MOCK_UI_DELETE':
+          return sendJson(res, 200, chatCompletion(JSON.stringify({
+            intent: 'delete',
+            delete: { targetIds: [2] }
+          })));
+        case 'MOCK_UI_DELETE_CREATED':
+          return sendJson(res, 200, chatCompletion(JSON.stringify({
+            intent: 'delete',
+            delete: { targetIds: [8] }
+          })));
+        case 'MOCK_UI_CLEANUP':
+          return sendJson(res, 200, chatCompletion(JSON.stringify({
+            intent: 'cleanup',
+            cleanup: { range: { type: 'last_month' } }
+          })));
+        case 'MOCK_UI_CLEANUP_EMPTY':
+          return sendJson(res, 200, chatCompletion(JSON.stringify({
+            intent: 'cleanup',
+            cleanup: { range: { type: 'next_month' } }
+          })));
+        case 'MOCK_UI_DELAYED':
+          return sendJson(res, 200, chatCompletion(JSON.stringify({
+            intent: 'create',
+            create: {
+              candidates: [{ title: '助手延迟候选', kind: 'assignment', deadline: `${localDate(4)} 23:59`, status: 'not_started', workType: 'personal' }],
+              ignored: []
+            }
+          })), 400);
         case 'MOCK_400':
           return sendJson(res, 400, { error: { message: 'secret-body' } });
         case 'MOCK_404':
@@ -290,6 +410,104 @@ async function openStagePage(electronApp, pageErrors) {
   page.on('pageerror', error => pageErrors.push(error.message));
   await page.waitForLoadState('domcontentloaded');
   return page;
+}
+
+function itemsOf(page) {
+  return page.evaluate(() => window.deadlineDesk.items.list());
+}
+
+function assistantInput(page, text) {
+  return page.fill('#assistantInput', text);
+}
+
+function submitAssistant(page) {
+  return page.click('#assistantSubmit');
+}
+
+function waitAssistant(page, selector) {
+  return page.waitForSelector(selector, { timeout: 5000 });
+}
+
+function waitAssistantConfig(page, expected = 'ready') {
+  return page.waitForFunction(
+    value => document.querySelector('#assistantConfigWarning')?.dataset.config === value,
+    expected,
+    { timeout: 5000 }
+  );
+}
+
+function waitAssistantRecordCount(page, count) {
+  return page.waitForFunction(
+    amount => document.querySelectorAll('.assistant-record').length >= amount,
+    count,
+    { timeout: 5000 }
+  );
+}
+
+function waitAssistantText(page, selector, text) {
+  return page.waitForFunction(
+    args => (document.querySelector(args[0])?.innerText || '').includes(args[1]),
+    [selector, text],
+    { timeout: 5000 }
+  );
+}
+
+async function pollAssistant(predicate, timeoutMs = 5000, intervalMs = 50) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
+  throw new Error('等待助手条件超时');
+}
+
+async function resetAssistant(page, expected = 'ready') {
+  await page.click('.nav-item[data-page="settings"]');
+  await page.click('.nav-item[data-page="assistant"]');
+  await waitAssistantConfig(page, expected);
+}
+
+function assistantResultText(page) {
+  return page.innerText('#assistantResult');
+}
+
+async function fillAssistantField(page, selector, value) {
+  await page.fill(selector, value);
+  await page.evaluate(target => {
+    const element = document.querySelector(target);
+    if (element) element.dispatchEvent(new Event('change', { bubbles: true }));
+  }, selector);
+}
+
+async function setAssistantFieldValue(page, selector, value) {
+  await page.evaluate(args => {
+    const element = document.querySelector(args[0]);
+    if (!element) throw new Error(`字段不存在：${args[0]}`);
+    const prototype = element instanceof window.HTMLTextAreaElement
+      ? window.HTMLTextAreaElement.prototype
+      : window.HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(prototype, 'value').set;
+    setter.call(element, args[1]);
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+  }, [selector, value]);
+}
+
+function updateItemThroughIpc(page, id, overrides = {}) {
+  return page.evaluate(async args => {
+    const items = await window.deadlineDesk.items.list();
+    const item = items.find(entry => entry.id === args.id);
+    if (!item) throw new Error(`事项 ${args.id} 不存在`);
+    await window.deadlineDesk.items.update(args.id, {
+      kind: item.kind,
+      title: item.title,
+      description: item.description,
+      deadline: item.deadline,
+      status: item.status,
+      workType: item.work_type,
+      ...args.overrides
+    });
+  }, { id, overrides });
 }
 
 async function runStageA(electronApp, mock, pageErrors) {
@@ -690,6 +908,10 @@ async function runStageE(electronApp, mock, pageErrors) {
   const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
   const expectedLastMonthLabel = `${lastMonthStart.getFullYear()}年${lastMonthStart.getMonth() + 1}月1日–${lastMonthStart.getMonth() + 1}月${lastMonthEnd.getDate()}日`;
   assert(cleanup.cleanup.rangeLabel === expectedLastMonthLabel, `上月范围标签不正确：${cleanup.cleanup.rangeLabel}`);
+  assert(
+    cleanup.cleanup.range.start === formatYmd(lastMonthStart) && cleanup.cleanup.range.end === formatYmd(lastMonthEnd),
+    `上月范围边界不正确：${JSON.stringify(cleanup.cleanup.range)}`
+  );
 
   const emptyCleanup = await parse(page, 'MOCK_PLAN_CLEANUP_EMPTY');
   assert(emptyCleanup.ok === true && emptyCleanup.intent === 'cleanup', `空结果清理应返回 cleanup，实际 ${JSON.stringify(emptyCleanup)}`);
@@ -699,6 +921,10 @@ async function runStageE(electronApp, mock, pageErrors) {
   const nextMonthEnd = new Date(now.getFullYear(), now.getMonth() + 2, 0);
   const expectedNextMonthLabel = `${nextMonthStart.getFullYear()}年${nextMonthStart.getMonth() + 1}月1日–${nextMonthStart.getMonth() + 1}月${nextMonthEnd.getDate()}日`;
   assert(emptyCleanup.cleanup.rangeLabel === expectedNextMonthLabel, `下月范围标签不正确：${emptyCleanup.cleanup.rangeLabel}`);
+  assert(
+    emptyCleanup.cleanup.range.start === formatYmd(nextMonthStart) && emptyCleanup.cleanup.range.end === formatYmd(nextMonthEnd),
+    `下月范围边界不正确：${JSON.stringify(emptyCleanup.cleanup.range)}`
+  );
   passCheck(28);
 
   const itemsAfter = await snapshotItems(page);
@@ -718,6 +944,651 @@ async function runStageE(electronApp, mock, pageErrors) {
     assert(!text.includes(apiKey) && !text.includes(mockEndpoint) && !text.includes('secret-body'), `${key} 错误对象泄露了敏感信息`);
   }
   passCheck(30);
+}
+
+async function runStageF(electronApp, mock, pageErrors) {
+  const page = await openStagePage(electronApp, pageErrors);
+  const now = new Date();
+  await page.click('.nav-item[data-page="assistant"]');
+  await waitAssistantConfig(page, 'ready');
+
+  const navOrder = await page.evaluate(() => [...document.querySelectorAll('.sidebar-bottom .nav-item[data-page]')].map(button => button.dataset.page));
+  assert(navOrder.join(',') === 'assistant,settings', `侧边栏底部导航顺序不正确：${navOrder.join(',')}`);
+  const navInfo = await page.evaluate(() => {
+    const button = document.querySelector('.sidebar-bottom .nav-item[data-page="assistant"]');
+    return { text: button.innerText.trim(), hasCount: Boolean(button.querySelector('.nav-count')) };
+  });
+  assert(navInfo.text === '助手' && navInfo.hasCount === false, `助手入口文案或角标不正确：${JSON.stringify(navInfo)}`);
+  const structure = await page.evaluate(() => ({
+    input: Boolean(document.querySelector('#assistantInput')),
+    submit: Boolean(document.querySelector('#assistantSubmit')),
+    counter: Boolean(document.querySelector('#assistantCounter')),
+    result: Boolean(document.querySelector('#assistantResult')),
+    records: Boolean(document.querySelector('#assistantRecords')),
+    maxlength: document.querySelector('#assistantInput')?.getAttribute('maxlength'),
+    privacy: document.querySelector('.assistant-privacy')?.innerText || '',
+    searchHidden: document.querySelector('#searchBox')?.classList.contains('hidden'),
+    warningHidden: document.querySelector('#assistantConfigWarning')?.classList.contains('hidden')
+  }));
+  assert(structure.input && structure.submit && structure.counter && structure.result && structure.records, '助手页必需节点缺失');
+  assert(structure.maxlength === null, '助手输入框不应设置 maxlength');
+  assert(structure.privacy.includes('会发送') && structure.privacy.includes('不会发送'), '隐私说明缺少发送/不发送字段清单');
+  assert(structure.searchHidden === true, '助手页应隐藏搜索框');
+  assert(structure.warningHidden === true, '已配置时配置提示应隐藏');
+  const aiReady = await readAi(page);
+  assert(aiReady.configured === true, `助手页前置配置应为已配置，实际 ${JSON.stringify(aiReady)}`);
+  passCheck(31);
+
+  await assistantInput(page, 'MOCK_UI_CREATE');
+  await submitAssistant(page);
+  await waitAssistant(page, '[data-row-id="c0"]');
+  const rows32 = await page.evaluate(() => [...document.querySelectorAll('#assistantResult .assistant-row[data-row-id]')].map(row => ({
+    rowId: row.dataset.rowId,
+    checked: row.querySelector('input[data-assistant-field="selected"]').checked,
+    disabled: row.querySelector('input[data-assistant-field="selected"]').disabled,
+    duplicate: Boolean(row.querySelector('.assistant-badge.duplicate')),
+    expired: Boolean(row.querySelector('.assistant-badge.expired')),
+    missing: Boolean(row.querySelector('.assistant-badge.missing'))
+  })));
+  assert(rows32.map(row => row.rowId).join(',') === 'c0,c1,c2,c3', `可见候选顺序不正确：${rows32.map(row => row.rowId).join(',')}`);
+  assert(rows32[0].duplicate === true && rows32[0].checked === false, `c0 应疑似重复且未勾选：${JSON.stringify(rows32[0])}`);
+  assert(rows32[1].checked === true && rows32[1].duplicate === false, `c1 应默认勾选且无重复徽标：${JSON.stringify(rows32[1])}`);
+  assert(rows32[2].expired === true && rows32[2].checked === true, `c2 应已过期且默认勾选：${JSON.stringify(rows32[2])}`);
+  assert(rows32[3].missing === true && rows32[3].disabled === true && rows32[3].checked === false, `c3 应待补全且不可勾选：${JSON.stringify(rows32[3])}`);
+  const ignoredCount32 = await page.evaluate(() => document.querySelectorAll('.assistant-ignored-item').length);
+  assert(ignoredCount32 === 1, `ignored 数量应为 1，实际 ${ignoredCount32}`);
+  const ignoredText32 = await page.innerText('.assistant-ignored');
+  assert(ignoredText32.includes('随手一提') && ignoredText32.includes('没有明确标题'), `ignored 文案不正确：${ignoredText32}`);
+  const writeText32 = await page.innerText('[data-assistant-action="write-create"]');
+  assert(writeText32 === '写入 2 条', `写入按钮文案不正确：${writeText32}`);
+  const omittedCount32 = await page.evaluate(() => document.querySelectorAll('.assistant-omitted').length);
+  assert(omittedCount32 === 0, 'omittedCount 为 0 时不应渲染省略提示');
+
+  await page.selectOption('[data-row-id="c1"] select[data-assistant-field="kind"]', 'assignment');
+  const switchedToAssignment32 = await page.evaluate(() => {
+    const row = document.querySelector('[data-row-id="c1"]');
+    const status = row.querySelector('select[data-assistant-field="status"]');
+    return {
+      status: status.value,
+      options: [...status.options].map(option => option.textContent),
+      adjusted: Boolean(row.querySelector('.assistant-badge.status-adjusted')),
+      workTypeHidden: row.querySelector('.assistant-worktype').classList.contains('hidden'),
+      workType: row.querySelector('select[data-assistant-field="workType"]')?.value,
+      checked: row.querySelector('input[data-assistant-field="selected"]').checked
+    };
+  });
+  assert(switchedToAssignment32.status === 'not_started', `切换为大作业后状态应收敛为 not_started：${JSON.stringify(switchedToAssignment32)}`);
+  assert(switchedToAssignment32.options.join(',') === '未开始,进行中,已完成', `切换为大作业后状态选项不正确：${switchedToAssignment32.options.join(',')}`);
+  assert(switchedToAssignment32.adjusted === true, '原状态不适用时应显示「状态已重置」徽标');
+  assert(switchedToAssignment32.workTypeHidden === false && switchedToAssignment32.workType === 'personal', `切换为大作业应补全个人/团队：${JSON.stringify(switchedToAssignment32)}`);
+  assert(switchedToAssignment32.checked === true, '切换类型后原已勾选候选应保持勾选');
+
+  await page.selectOption('[data-row-id="c1"] select[data-assistant-field="kind"]', 'activity');
+  const switchedBack32 = await page.evaluate(() => {
+    const row = document.querySelector('[data-row-id="c1"]');
+    const status = row.querySelector('select[data-assistant-field="status"]');
+    return {
+      status: status.value,
+      options: [...status.options].map(option => option.textContent),
+      workTypeHidden: row.querySelector('.assistant-worktype').classList.contains('hidden'),
+      adjusted: Boolean(row.querySelector('.assistant-badge.status-adjusted'))
+    };
+  });
+  assert(switchedBack32.status === 'not_completed' && switchedBack32.options.join(',') === '未完成,已完成', `切回活动后状态选项不正确：${JSON.stringify(switchedBack32)}`);
+  assert(switchedBack32.workTypeHidden === true, '活动候选应隐藏个人/团队字段');
+  assert(switchedBack32.adjusted === true, '切回活动后仍应显示「状态已重置」徽标');
+
+  const longTitle32 = '长'.repeat(121);
+  await setAssistantFieldValue(page, '[data-row-id="c1"] input[data-assistant-field="title"]', longTitle32);
+  await setAssistantFieldValue(page, '[data-row-id="c2"] input[data-assistant-field="title"]', longTitle32);
+  const tooLong32 = await page.evaluate(() => ({
+    badges: document.querySelectorAll('[data-row-id="c1"] .assistant-badge.title-too-long, [data-row-id="c2"] .assistant-badge.title-too-long').length,
+    text: document.querySelector('[data-assistant-action="write-create"]').textContent.trim(),
+    disabled: document.querySelector('[data-assistant-action="write-create"]').disabled,
+    reason: document.querySelector('.assistant-reason').innerText.trim()
+  }));
+  assert(tooLong32.badges === 2, `超长标题应出现「标题过长」徽标，实际 ${tooLong32.badges}`);
+  assert(tooLong32.disabled === true && tooLong32.reason === '标题超过 120 字符，请缩短后再保存', `超长标题禁用原因不正确：${JSON.stringify(tooLong32)}`);
+
+  await fillAssistantField(page, '[data-row-id="c1"] input[data-assistant-field="title"]', '校园摄影比赛');
+  await fillAssistantField(page, '[data-row-id="c2"] input[data-assistant-field="title"]', '补录旧作业');
+  const restoredTitle32 = await page.evaluate(() => ({
+    text: document.querySelector('[data-assistant-action="write-create"]').textContent.trim(),
+    disabled: document.querySelector('[data-assistant-action="write-create"]').disabled,
+    badge: Boolean(document.querySelector('.assistant-badge.title-too-long'))
+  }));
+  assert(restoredTitle32.badge === false, '恢复标题后应移除「标题过长」徽标');
+  assert(restoredTitle32.text === '写入 2 条' && restoredTitle32.disabled === false, `恢复标题后按钮不正确：${JSON.stringify(restoredTitle32)}`);
+  passCheck(32);
+
+  const countsBefore33 = await page.evaluate(() => ({
+    activity: document.querySelector('#activityCount').innerText,
+    activityTotal: document.querySelector('#activityTotalStat').innerText
+  }));
+  await page.click('[data-row-id="c2"] input[data-assistant-field="selected"]');
+  await waitAssistantText(page, '[data-assistant-action="write-create"]', '写入 1 条');
+  await page.click('[data-assistant-action="write-create"]');
+  await waitAssistantRecordCount(page, 1);
+  const after33 = await page.evaluate(() => ({
+    busy: document.querySelector('#assistantResult').innerText.includes('正在处理…'),
+    inputDisabled: document.querySelector('#assistantInput').disabled,
+    submitDisabled: document.querySelector('#assistantSubmit').disabled,
+    submitText: document.querySelector('#assistantSubmit').innerText.trim(),
+    activity: document.querySelector('#activityCount').innerText,
+    activityTotal: document.querySelector('#activityTotalStat').innerText
+  }));
+  assert(after33.busy === false, '执行结束后结果区不应停留在加载占位');
+  assert(after33.inputDisabled === false && after33.submitDisabled === false, '执行结束后输入与提交应解除禁用');
+  assert(after33.submitText === '解析', `执行结束后提交按钮文案不正确：${after33.submitText}`);
+  const items33 = await itemsOf(page);
+  assert(items33.length === 8, `执行后事项数应为 8，实际 ${items33.length}`);
+  assert(items33.filter(item => item.title === '校园摄影比赛').length === 1, '应新增「校园摄影比赛」1 条');
+  assert(items33.filter(item => item.title === '数据库课程设计').length === 1, '「数据库课程设计」应仍为 1 条');
+  assert(!items33.some(item => item.title === '补录旧作业'), '取消勾选的「补录旧作业」不应写入');
+  assert(!items33.some(item => item.title === '缺少时间的作业'), '不可执行的「缺少时间的作业」不应写入');
+  assert(Number(after33.activity) === Number(countsBefore33.activity) + 1, `活动导航计数应 +1：${countsBefore33.activity} → ${after33.activity}`);
+  assert(Number(after33.activityTotal) === Number(countsBefore33.activityTotal) + 1, `活动统计应 +1：${countsBefore33.activityTotal} → ${after33.activityTotal}`);
+  const record33 = await page.innerText('#assistantRecords');
+  assert(record33.includes('已新增「校园摄影比赛」'), `记录缺少新增明细：${record33}`);
+  assert(record33.includes('新增 1 条（成功 1，失败 0）'), `记录缺少汇总：${record33}`);
+  passCheck(33);
+
+  await assistantInput(page, 'MOCK_UI_CREATE_MISSING');
+  await submitAssistant(page);
+  await waitAssistant(page, '[data-row-id="c0"]');
+  const c1Before34 = await page.evaluate(() => {
+    const input = document.querySelector('[data-row-id="c1"] input[data-assistant-field="selected"]');
+    return { disabled: input.disabled, checked: input.checked };
+  });
+  assert(c1Before34.disabled === true && c1Before34.checked === false, `缺时间候选应不可勾选：${JSON.stringify(c1Before34)}`);
+  await page.fill('[data-row-id="c1"] input[data-assistant-field="deadlineDate"]', localDate(4));
+  const c1After34 = await page.evaluate(() => {
+    const input = document.querySelector('[data-row-id="c1"] input[data-assistant-field="selected"]');
+    return { disabled: input.disabled, checked: input.checked };
+  });
+  assert(c1After34.disabled === false && c1After34.checked === true, `补全日期后应可勾选且自动勾选：${JSON.stringify(c1After34)}`);
+  await page.click('[data-row-id="c2"] [data-assistant-action="remove-row"]');
+  const c2Removed34 = await page.evaluate(() => !document.querySelector('[data-row-id="c2"]'));
+  assert(c2Removed34 === true, '移除后的候选不应继续渲染');
+  await waitAssistantText(page, '[data-assistant-action="write-create"]', '写入 2 条');
+  await page.click('[data-assistant-action="write-create"]');
+  await waitAssistantRecordCount(page, 2);
+  const items34 = await itemsOf(page);
+  const normal34 = items34.find(item => item.title === '助手正常候选');
+  const pending34 = items34.find(item => item.title === '助手待补全候选');
+  assert(Boolean(normal34), '应写入「助手正常候选」');
+  assert(Boolean(pending34) && pending34.deadline === `${localDate(4)} 23:59`, `「助手待补全候选」截止时间不正确：${JSON.stringify(pending34)}`);
+  assert(!items34.some(item => item.title === '助手移除候选'), '移除候选不应写入');
+  passCheck(34);
+
+  await assistantInput(page, 'MOCK_UI_UPDATE');
+  await submitAssistant(page);
+  await waitAssistant(page, '.assistant-diff-row[data-field="deadline"]');
+  const targetDate35 = new Date();
+  targetDate35.setDate(targetDate35.getDate() + 2);
+  const expectedOld35 = `${targetDate35.getMonth() + 1}月${targetDate35.getDate()}日`;
+  const updateOld35 = await page.innerText('.assistant-diff-row[data-field="deadline"] .assistant-old');
+  assert(updateOld35.includes(expectedOld35), `diff 旧截止日期不正确：${updateOld35}`);
+  const dateValue35 = await page.evaluate(() => document.querySelector('.assistant-diff-row[data-field="deadline"] input[data-assistant-field="deadlineDate"]').value);
+  assert(dateValue35 === localDate(6), `diff 新截止日期不正确：${dateValue35}`);
+
+  await page.fill('.assistant-diff-row[data-field="deadline"] input[data-assistant-field="deadlineDate"]', localDate(2));
+  const unchanged35 = await page.evaluate(() => ({
+    disabled: document.querySelector('[data-assistant-action="save-update"]').disabled,
+    reason: document.querySelector('.assistant-reason').innerText.trim()
+  }));
+  assert(unchanged35.disabled === true && unchanged35.reason === '没有可执行的修改', `改回基线值后禁用原因不正确：${JSON.stringify(unchanged35)}`);
+  await page.fill('.assistant-diff-row[data-field="deadline"] input[data-assistant-field="deadlineDate"]', localDate(6));
+  const restoredChange35 = await page.evaluate(() => document.querySelector('[data-assistant-action="save-update"]').disabled);
+  assert(restoredChange35 === false, '恢复变更后保存按钮应重新可用');
+
+  await updateItemThroughIpc(page, 2, { title: '并发改动' });
+  await page.click('[data-assistant-action="save-update"]');
+  await waitAssistantRecordCount(page, 1);
+  const record35a = await page.innerText('#assistantRecords');
+  assert(record35a.includes('「校辩论赛报名」已在其他入口被修改，请重新提交'), `记录缺并发修改拦截明细：${record35a}`);
+  assert(record35a.includes('修改 1 条（成功 0，失败 1）'), `并发修改拦截汇总不正确：${record35a}`);
+  const item2Concurrent35 = (await itemsOf(page)).find(item => item.id === 2);
+  assert(Boolean(item2Concurrent35) && item2Concurrent35.title === '并发改动', `并发修改后执行不得覆盖其他入口的修改：${JSON.stringify(item2Concurrent35)}`);
+  assert(item2Concurrent35.deadline === `${localDate(2)} 23:59`, `并发修改被拦截后截止时间不应改变：${item2Concurrent35.deadline}`);
+
+  await resetAssistant(page);
+  await assistantInput(page, 'MOCK_UI_UPDATE');
+  await submitAssistant(page);
+  await waitAssistant(page, '.assistant-diff-row[data-field="deadline"]');
+  await page.click('[data-assistant-action="save-update"]');
+  await waitAssistantRecordCount(page, 1);
+  const items35 = await itemsOf(page);
+  const item2After35 = items35.find(item => item.id === 2);
+  assert(Boolean(item2After35) && item2After35.deadline === `${localDate(6)} 23:59`, `id 2 截止时间未按预览保存：${JSON.stringify(item2After35)}`);
+  assert(item2After35.description === '', `id 2 说明应保持不变：${item2After35.description}`);
+  assert(item2After35.title === '并发改动', `id 2 标题应保持最新值：${item2After35.title}`);
+  const record35 = await page.innerText('#assistantRecords');
+  assert(record35.includes('已保存「并发改动」的修改'), `记录缺修改明细：${record35}`);
+  assert(record35.includes('修改 1 条（成功 1，失败 0）'), `记录缺修改汇总：${record35}`);
+
+  await assistantInput(page, 'MOCK_UI_UPDATE_MULTI');
+  await submitAssistant(page);
+  await waitAssistant(page, '.assistant-target-option');
+  const multi35 = await page.evaluate(() => ({
+    options: document.querySelectorAll('.assistant-target-option').length,
+    checked: [...document.querySelectorAll('#assistantResult input[data-assistant-action="pick-target"]')].filter(input => input.checked).length,
+    disabled: document.querySelector('[data-assistant-action="save-update"]').disabled,
+    reason: document.querySelector('.assistant-reason').innerText.trim()
+  }));
+  assert(multi35.options === 2, `多目标选项数量不正确：${multi35.options}`);
+  assert(multi35.checked === 0, '多目标默认不应选中任何一项');
+  assert(multi35.disabled === true && multi35.reason === '请先选择要修改的事项', `多目标禁用原因不正确：${JSON.stringify(multi35)}`);
+  await page.click('#assistantResult input[data-assistant-action="pick-target"]');
+  await waitAssistant(page, '.assistant-diff-row');
+  const enabledAfterPick35 = await page.evaluate(() => document.querySelector('[data-assistant-action="save-update"]').disabled);
+  assert(enabledAfterPick35 === false, '选定目标后保存按钮应可用');
+
+  await resetAssistant(page);
+  await assistantInput(page, 'MOCK_UI_UPDATE_STATUS_INVALID');
+  await submitAssistant(page);
+  await waitAssistant(page, '.assistant-diff-row[data-field="status"]');
+  const statusInvalid35 = await page.evaluate(() => {
+    const select = document.querySelector('.assistant-diff-row[data-field="status"] select');
+    return {
+      value: select.value,
+      firstOption: select.options[0].textContent,
+      disabled: document.querySelector('[data-assistant-action="save-update"]').disabled,
+      reason: document.querySelector('.assistant-reason').innerText.trim()
+    };
+  });
+  assert(statusInvalid35.value === '' && statusInvalid35.firstOption === '请选择状态', `非法状态初始值不正确：${JSON.stringify(statusInvalid35)}`);
+  assert(statusInvalid35.disabled === true && statusInvalid35.reason === '请先为所选项选择有效状态', `非法状态禁用原因不正确：${JSON.stringify(statusInvalid35)}`);
+  await page.selectOption('.assistant-diff-row[data-field="status"] select', 'completed');
+  const statusFixed35 = await page.evaluate(() => document.querySelector('[data-assistant-action="save-update"]').disabled);
+  assert(statusFixed35 === false, '选择合法状态后保存按钮应可用');
+
+  await resetAssistant(page);
+  await assistantInput(page, 'MOCK_UI_UPDATE_TITLE');
+  await submitAssistant(page);
+  await waitAssistant(page, '.assistant-diff-row[data-field="title"]');
+  await page.fill('.assistant-diff-row[data-field="title"] input', '');
+  const titleCleared35 = await page.evaluate(() => ({
+    disabled: document.querySelector('[data-assistant-action="save-update"]').disabled,
+    reason: document.querySelector('.assistant-reason').innerText.trim()
+  }));
+  assert(titleCleared35.disabled === true && titleCleared35.reason.includes('标题不能为空'), `空标题禁用原因不正确：${JSON.stringify(titleCleared35)}`);
+  await page.fill('.assistant-diff-row[data-field="title"] input', '数据库课程设计（新）');
+  const titleFixed35 = await page.evaluate(() => document.querySelector('[data-assistant-action="save-update"]').disabled);
+  assert(titleFixed35 === false, '标题恢复后保存按钮应可用');
+  await resetAssistant(page);
+  passCheck(35);
+
+  await assistantInput(page, 'MOCK_UI_DELETE');
+  await submitAssistant(page);
+  await waitAssistant(page, '[data-target-id="2"]');
+  await page.click('#assistantResult .assistant-target-row input[data-assistant-field="selected"]');
+  const unchecked36 = await page.evaluate(() => ({
+    text: document.querySelector('[data-assistant-action="delete"]').textContent.trim(),
+    disabled: document.querySelector('[data-assistant-action="delete"]').disabled,
+    reason: document.querySelector('.assistant-reason').innerText.trim()
+  }));
+  assert(unchecked36.text === '删除 0 条', `全部取消勾选后按钮文案不正确：${unchecked36.text}`);
+  assert(unchecked36.disabled === true && unchecked36.reason === '没有选择任何条目', `全部取消勾选后禁用原因不正确：${JSON.stringify(unchecked36)}`);
+  await page.click('#assistantResult .assistant-target-row input[data-assistant-field="selected"]');
+  const rechecked36 = await page.evaluate(() => ({
+    text: document.querySelector('[data-assistant-action="delete"]').textContent.trim(),
+    disabled: document.querySelector('[data-assistant-action="delete"]').disabled,
+    reason: document.querySelector('.assistant-reason').innerText.trim()
+  }));
+  assert(rechecked36.text === '删除 1 条' && rechecked36.disabled === false && rechecked36.reason === '', `重新勾选后按钮不正确：${JSON.stringify(rechecked36)}`);
+  const dangerText36 = await page.innerText('.assistant-danger-note');
+  assert(dangerText36.includes('永久删除') && dangerText36.includes('无法恢复'), `删除提示文案不正确：${dangerText36}`);
+  await page.click('[data-assistant-action="delete"]');
+  await waitAssistant(page, '#confirmModal.open');
+  await page.click('#confirmCancel');
+  const canceled36 = await page.evaluate(() => Boolean(document.querySelector('[data-target-id="2"]')));
+  assert((await itemsOf(page)).some(item => item.id === 2), '取消确认后 id 2 应仍存在');
+  assert(canceled36 === true, '取消确认后应保留预览');
+  await page.click('[data-assistant-action="delete"]');
+  await waitAssistant(page, '#confirmModal.open');
+  await page.click('#confirmAccept');
+  await waitAssistantRecordCount(page, 1);
+  assert(!(await itemsOf(page)).some(item => item.id === 2), '确认后 id 2 应被永久删除');
+  const record36 = await page.innerText('#assistantRecords');
+  assert(record36.includes('已永久删除「并发改动」'), `记录缺删除明细：${record36}`);
+  assert(record36.includes('删除 1 条（成功 1，跳过 0，失败 0）'), `记录缺删除汇总：${record36}`);
+
+  await assistantInput(page, 'MOCK_UI_DELETE_CREATED');
+  await submitAssistant(page);
+  await waitAssistant(page, '[data-target-id="8"]');
+  await page.evaluate(() => window.deadlineDesk.items.remove(8));
+  await page.click('[data-assistant-action="delete"]');
+  await waitAssistant(page, '#confirmModal.open');
+  await page.click('#confirmAccept');
+  await waitAssistantRecordCount(page, 2);
+  const record36b = await page.innerText('#assistantRecords');
+  assert(record36b.includes('已不存在（跳过）'), `记录缺「已不存在」跳过明细：${record36b}`);
+  assert(!(await itemsOf(page)).some(item => item.id === 8), '已不存在的 id 8 不应重新出现');
+  passCheck(36);
+
+  await assistantInput(page, 'MOCK_UI_CLEANUP');
+  await submitAssistant(page);
+  await waitAssistant(page, '.assistant-range');
+  const lastMonthStart37 = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const lastMonthEnd37 = new Date(now.getFullYear(), now.getMonth(), 0);
+  const expectedLastMonthLabel37 = `${lastMonthStart37.getFullYear()}年${lastMonthStart37.getMonth() + 1}月1日–${lastMonthStart37.getMonth() + 1}月${lastMonthEnd37.getDate()}日`;
+  const lastMonthDeadline37 = monthDate(-1, 10, '09:00');
+  const rangeText37 = await page.innerText('.assistant-range');
+  assert(rangeText37.includes(expectedLastMonthLabel37), `清理范围标签不正确：${rangeText37}`);
+  const cleanupRows37 = await page.evaluate(() => [...document.querySelectorAll('#assistantResult .assistant-target-row')].map(row => ({
+    id: Number(row.dataset.targetId),
+    checked: row.querySelector('input[data-assistant-field="selected"]').checked
+  })));
+  assert(cleanupRows37.length === 1 && cleanupRows37[0].id === 5 && cleanupRows37[0].checked === true, `清理目标不正确：${JSON.stringify(cleanupRows37)}`);
+  assert(!cleanupRows37.some(row => row.id === 6 || row.id === 7), '清理不应包含未完成或本月事项');
+
+  await page.click('#assistantResult .assistant-target-row input[data-assistant-field="selected"]');
+  const uncheckedCleanup37 = await page.evaluate(() => ({
+    text: document.querySelector('[data-assistant-action="delete"]').textContent.trim(),
+    disabled: document.querySelector('[data-assistant-action="delete"]').disabled,
+    reason: document.querySelector('.assistant-reason').innerText.trim()
+  }));
+  assert(uncheckedCleanup37.text === '删除 0 条', `清理全部取消勾选后按钮文案不正确：${uncheckedCleanup37.text}`);
+  assert(uncheckedCleanup37.disabled === true && uncheckedCleanup37.reason === '没有选择任何条目', `清理全部取消勾选后禁用原因不正确：${JSON.stringify(uncheckedCleanup37)}`);
+  await page.click('#assistantResult .assistant-target-row input[data-assistant-field="selected"]');
+  const recheckedCleanup37 = await page.evaluate(() => ({
+    text: document.querySelector('[data-assistant-action="delete"]').textContent.trim(),
+    disabled: document.querySelector('[data-assistant-action="delete"]').disabled
+  }));
+  assert(recheckedCleanup37.text === '删除 1 条' && recheckedCleanup37.disabled === false, `清理重新勾选后按钮不正确：${JSON.stringify(recheckedCleanup37)}`);
+
+  await updateItemThroughIpc(page, 5, { status: 'not_started' });
+  const recordsBefore37 = await page.evaluate(() => document.querySelectorAll('.assistant-record').length);
+  await page.click('[data-assistant-action="delete"]');
+  await waitAssistant(page, '#confirmModal.open');
+  await page.click('#confirmAccept');
+  await waitAssistantRecordCount(page, recordsBefore37 + 1);
+  const record37a = await page.innerText('#assistantRecords');
+  assert(record37a.includes('「上月已完成作业」状态已变化，跳过'), `记录缺清理状态变化跳过明细：${record37a}`);
+  assert(record37a.includes('删除 1 条（成功 0，跳过 1，失败 0）'), `清理状态变化跳过汇总不正确：${record37a}`);
+  assert((await itemsOf(page)).some(item => item.id === 5), '状态已变化的 id 5 不应被清理');
+
+  await updateItemThroughIpc(page, 5, { status: 'completed', deadline: lastMonthDeadline37 });
+  await resetAssistant(page);
+  await assistantInput(page, 'MOCK_UI_CLEANUP');
+  await submitAssistant(page);
+  await waitAssistant(page, '[data-target-id="5"]');
+  await updateItemThroughIpc(page, 5, { deadline: `${localDate(0)} 12:00` });
+  await page.click('[data-assistant-action="delete"]');
+  await waitAssistant(page, '#confirmModal.open');
+  await page.click('#confirmAccept');
+  await waitAssistantRecordCount(page, 1);
+  const record37b = await page.innerText('#assistantRecords');
+  assert(record37b.includes('「上月已完成作业」截止时间已不在范围内，跳过'), `记录缺清理范围复核跳过明细：${record37b}`);
+  assert(record37b.includes('删除 1 条（成功 0，跳过 1，失败 0）'), `清理范围复核跳过汇总不正确：${record37b}`);
+  assert((await itemsOf(page)).some(item => item.id === 5), '截止时间越界的 id 5 不应被清理');
+
+  await updateItemThroughIpc(page, 5, { deadline: lastMonthDeadline37 });
+  await resetAssistant(page);
+  await assistantInput(page, 'MOCK_UI_CLEANUP');
+  await submitAssistant(page);
+  await waitAssistant(page, '[data-target-id="5"]');
+  await page.click('[data-assistant-action="delete"]');
+  await waitAssistant(page, '#confirmModal.open');
+  await page.click('#confirmAccept');
+  await waitAssistantRecordCount(page, 1);
+  const items37 = await itemsOf(page);
+  assert(!items37.some(item => item.id === 5), 'id 5 应被清理');
+  assert(items37.some(item => item.id === 6) && items37.some(item => item.id === 7), 'id 6 / 7 应保留');
+  const record37 = await page.innerText('#assistantRecords');
+  assert(record37.includes('删除 1 条（成功 1，跳过 0，失败 0）'), `记录缺清理汇总：${record37}`);
+
+  await assistantInput(page, 'MOCK_UI_CLEANUP_EMPTY');
+  await submitAssistant(page);
+  await waitAssistantText(page, '#assistantResult', '没有符合条件的已完成事项。');
+  const emptyDelete37 = await page.evaluate(() => Boolean(document.querySelector('[data-assistant-action="delete"]')));
+  assert(emptyDelete37 === false, '空清理结果不应渲染删除按钮');
+  passCheck(37);
+
+  const itemsBefore38 = JSON.stringify(await itemsOf(page));
+  await assistantInput(page, 'MOCK_QUERY_THIS_MONTH');
+  await submitAssistant(page);
+  await waitAssistant(page, '.assistant-answer');
+  const answer38 = await page.innerText('.assistant-answer');
+  assert(answer38 === '按截止时间在本月内：已完成 1 个。', `查询答复不正确：${answer38}`);
+  const monthStart38 = new Date(now.getFullYear(), now.getMonth(), 1);
+  const monthEnd38 = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  const expectedMonthLabel38 = `${monthStart38.getFullYear()}年${monthStart38.getMonth() + 1}月1日–${monthStart38.getMonth() + 1}月${monthEnd38.getDate()}日`;
+  const meta38 = await page.innerText('.assistant-query-meta');
+  assert(meta38.includes('按截止时间') && meta38.includes(expectedMonthLabel38), `查询口径说明不正确：${meta38}`);
+  assert(await page.evaluate(() => Boolean(document.querySelector('.assistant-query-counts'))), '查询应渲染统计汇总');
+  const actionButtons38 = await page.evaluate(() => document.querySelectorAll('#assistantResult [data-assistant-action]').length);
+  assert(actionButtons38 === 0, `查询结果不应包含执行按钮，实际 ${actionButtons38}`);
+  assert(await page.evaluate(() => document.querySelector('#confirmModal').classList.contains('open')) === false, '查询不应弹出确认框');
+  assert(JSON.stringify(await itemsOf(page)) === itemsBefore38, '查询不应写入事项');
+
+  await assistantInput(page, 'MOCK_QUERY_FALLBACK');
+  await submitAssistant(page);
+  await waitAssistant(page, '.assistant-fallback');
+  const fallbackText38 = await page.innerText('.assistant-fallback');
+  assert(fallbackText38.includes('模型组织文字失败，以下为本地数据汇总'), `回落提示文案不正确：${fallbackText38}`);
+  assert(await page.evaluate(() => Boolean(document.querySelector('.assistant-answer'))), '回落时仍应渲染本地汇总答复');
+  assert(JSON.stringify(await itemsOf(page)) === itemsBefore38, '回落查询不应写入事项');
+  passCheck(38);
+
+  const repeatedBefore39 = await page.evaluate(() => ({
+    records: document.querySelectorAll('.assistant-record').length,
+    answer: document.querySelector('.assistant-answer')?.innerText || '',
+    input: document.querySelector('#assistantInput').value
+  }));
+  assert(repeatedBefore39.records >= 1, `重复点击前应存在操作记录，实际 ${repeatedBefore39.records}`);
+  await page.click('.nav-item[data-page="assistant"]');
+  const repeatedAfter39 = await page.evaluate(() => ({
+    records: document.querySelectorAll('.assistant-record').length,
+    answer: document.querySelector('.assistant-answer')?.innerText || '',
+    input: document.querySelector('#assistantInput').value
+  }));
+  assert(repeatedAfter39.records === repeatedBefore39.records, `重复点击助手导航不应清空记录：${JSON.stringify({ before: repeatedBefore39, after: repeatedAfter39 })}`);
+  assert(repeatedAfter39.answer === repeatedBefore39.answer, `重复点击助手导航不应重置预览：${JSON.stringify({ before: repeatedBefore39, after: repeatedAfter39 })}`);
+  assert(repeatedAfter39.input === repeatedBefore39.input, `重复点击助手导航不应重置输入：${JSON.stringify({ before: repeatedBefore39, after: repeatedAfter39 })}`);
+
+  await assistantInput(page, '保留的输入');
+  await page.click('.nav-item[data-page="settings"]');
+  await page.click('.nav-item[data-page="assistant"]');
+  await waitAssistantConfig(page, 'ready');
+  const keptInput39 = await page.evaluate(() => document.querySelector('#assistantInput').value);
+  assert(keptInput39 === '保留的输入', `离开页面后输入应保留：${keptInput39}`);
+
+  await assistantInput(page, 'MOCK_UI_CREATE');
+  await submitAssistant(page);
+  await waitAssistant(page, '[data-row-id="c0"]');
+  const previewBeforeRepeat39 = await page.evaluate(() => ({
+    rows: document.querySelectorAll('#assistantResult .assistant-row[data-row-id]').length,
+    input: document.querySelector('#assistantInput').value
+  }));
+  await page.click('.nav-item[data-page="assistant"]');
+  const previewAfterRepeat39 = await page.evaluate(() => ({
+    rows: document.querySelectorAll('#assistantResult .assistant-row[data-row-id]').length,
+    input: document.querySelector('#assistantInput').value,
+    records: document.querySelectorAll('.assistant-record').length
+  }));
+  assert(previewAfterRepeat39.rows === previewBeforeRepeat39.rows && previewAfterRepeat39.rows > 0, `重复点击助手导航不应重置预览行：${JSON.stringify({ before: previewBeforeRepeat39, after: previewAfterRepeat39 })}`);
+  assert(previewAfterRepeat39.input === previewBeforeRepeat39.input, `重复点击助手导航不应重置输入：${JSON.stringify({ before: previewBeforeRepeat39, after: previewAfterRepeat39 })}`);
+  assert(previewAfterRepeat39.records === 0, `重复点击助手导航不应产生记录：${previewAfterRepeat39.records}`);
+  await page.click('.nav-item[data-page="settings"]');
+  const cleared39 = await page.evaluate(() => ({
+    result: document.querySelector('#assistantResult').innerText.trim(),
+    records: document.querySelectorAll('.assistant-record').length
+  }));
+  assert(cleared39.result === '' && cleared39.records === 0, `离开页面应清空预览与记录：${JSON.stringify(cleared39)}`);
+  await page.click('.nav-item[data-page="assistant"]');
+  await waitAssistantConfig(page, 'ready');
+  const restored39 = await page.evaluate(() => ({
+    placeholder: document.querySelector('#assistantResult').innerText.includes('提交后会在这里显示预览或答复。'),
+    rows: document.querySelectorAll('#assistantResult [data-row-id]').length,
+    input: document.querySelector('#assistantInput').value
+  }));
+  assert(restored39.placeholder === true && restored39.rows === 0, `返回助手页应只显示占位：${JSON.stringify(restored39)}`);
+  assert(restored39.input === 'MOCK_UI_CREATE', `返回助手页应保留输入：${restored39.input}`);
+
+  await assistantInput(page, 'MOCK_UI_DELAYED');
+  await submitAssistant(page);
+  const loading39 = await page.evaluate(() => ({
+    inputDisabled: document.querySelector('#assistantInput').disabled,
+    submitDisabled: document.querySelector('#assistantSubmit').disabled,
+    submitText: document.querySelector('#assistantSubmit').innerText.trim()
+  }));
+  assert(loading39.inputDisabled === true && loading39.submitDisabled === true, `加载中应禁用输入与提交：${JSON.stringify(loading39)}`);
+  assert(loading39.submitText === '正在处理…', `加载中文案不正确：${loading39.submitText}`);
+  await waitAssistant(page, '[data-row-id="c0"]');
+  const loaded39 = await page.evaluate(() => ({
+    inputDisabled: document.querySelector('#assistantInput').disabled,
+    submitDisabled: document.querySelector('#assistantSubmit').disabled,
+    submitText: document.querySelector('#assistantSubmit').innerText.trim()
+  }));
+  assert(loaded39.inputDisabled === false && loaded39.submitDisabled === false && loaded39.submitText === '解析', `加载结束后控件未恢复：${JSON.stringify(loaded39)}`);
+
+  const requestsBeforeLate39 = mock.requests.length;
+  await submitAssistant(page);
+  await page.click('.nav-item[data-page="settings"]');
+  await new Promise(resolve => setTimeout(resolve, 700));
+  const late39 = await page.evaluate(() => ({
+    result: document.querySelector('#assistantResult').innerText.trim(),
+    records: document.querySelectorAll('.assistant-record').length
+  }));
+  assert(late39.result === '' && late39.records === 0, `晚到响应不应写回页面：${JSON.stringify(late39)}`);
+  await page.click('.nav-item[data-page="assistant"]');
+  await waitAssistantConfig(page, 'ready');
+  const lateBack39 = await page.evaluate(() => ({
+    placeholder: document.querySelector('#assistantResult').innerText.includes('提交后会在这里显示预览或答复。'),
+    rows: document.querySelectorAll('#assistantResult [data-row-id]').length
+  }));
+  assert(lateBack39.placeholder === true && lateBack39.rows === 0, `晚到响应后返回应只显示占位：${JSON.stringify(lateBack39)}`);
+  assert(mock.requests.length === requestsBeforeLate39 + 1, `晚到响应应只发起一次请求，实际 ${mock.requests.length - requestsBeforeLate39}`);
+
+  await mock.resetMock();
+  await assistantInput(page, 'MOCK_UI_CREATE_BULK');
+  await submitAssistant(page);
+  await waitAssistant(page, '[data-row-id="c0"]');
+  const bulkRows39 = await page.evaluate(() => document.querySelectorAll('#assistantResult .assistant-row[data-row-id]').length);
+  const bulkText39 = await page.innerText('[data-assistant-action="write-create"]');
+  assert(bulkRows39 === 60 && bulkText39 === '写入 60 条', `批量预览不正确：rows=${bulkRows39} text=${bulkText39}`);
+  const itemsBeforeBulk39 = (await itemsOf(page)).length;
+  await page.evaluate(() => {
+    document.querySelector('[data-assistant-action="write-create"]').click();
+    document.querySelector('.nav-item[data-page="settings"]').click();
+  });
+  await pollAssistant(async () => (await itemsOf(page)).length > itemsBeforeBulk39, 5000);
+  await page.click('.nav-item[data-page="assistant"]');
+  await pollAssistant(async () => (await page.innerText('#assistantResult')).includes('正在处理…'), 5000);
+  const duringExecute39 = await page.evaluate(() => ({
+    inputDisabled: document.querySelector('#assistantInput').disabled,
+    submitDisabled: document.querySelector('#assistantSubmit').disabled,
+    busy: document.querySelector('#assistantResult').innerText.includes('正在处理…'),
+    records: document.querySelectorAll('.assistant-record').length
+  }));
+  assert(duringExecute39.busy === true && duringExecute39.inputDisabled === true && duringExecute39.submitDisabled === true, `执行中返回后应保持加载与禁用：${JSON.stringify(duringExecute39)}`);
+  assert(duringExecute39.records === 0, `执行中不应产生操作记录：${duringExecute39.records}`);
+  await pollAssistant(() => page.evaluate(() => document.querySelector('#assistantInput').disabled === false), 15000);
+  const finished39 = await page.evaluate(() => ({
+    busy: document.querySelector('#assistantResult').innerText.includes('正在处理…'),
+    placeholder: document.querySelector('#assistantResult').innerText.includes('提交后会在这里显示预览或答复。'),
+    records: document.querySelectorAll('.assistant-record').length,
+    input: document.querySelector('#assistantInput').value,
+    submitText: document.querySelector('#assistantSubmit').innerText.trim()
+  }));
+  assert(finished39.busy === false && finished39.placeholder === true, `执行结束应恢复占位：${JSON.stringify(finished39)}`);
+  assert(finished39.records === 0, `执行中离开又返回后不应写入操作记录：${finished39.records}`);
+  assert(finished39.input === 'MOCK_UI_CREATE_BULK', `执行结束后应保留输入：${finished39.input}`);
+  assert(finished39.submitText === '解析', `执行结束后提交按钮文案不正确：${finished39.submitText}`);
+  assert((await itemsOf(page)).length === itemsBeforeBulk39 + 60, `执行中离开后批次仍应完成写入：${(await itemsOf(page)).length}`);
+  passCheck(39);
+
+  await saveAi(page, { endpoint: '', model });
+  await resetAssistant(page, 'missing');
+  const warning40 = await page.evaluate(() => ({
+    config: document.querySelector('#assistantConfigWarning').dataset.config,
+    hidden: document.querySelector('#assistantConfigWarning').classList.contains('hidden')
+  }));
+  assert(warning40.config === 'missing' && warning40.hidden === false, `未配置时配置提示不正确：${JSON.stringify(warning40)}`);
+  await mock.resetMock();
+  await assistantInput(page, 'MOCK_CREATE');
+  await submitAssistant(page);
+  await waitAssistant(page, '.assistant-error');
+  const errorText40 = await page.innerText('.assistant-error');
+  assert(errorText40.includes('尚未完成 AI 配置'), `未配置错误文案不正确：${errorText40}`);
+  assert(mock.requests.length === 0, '未配置时不得发起模型请求');
+  const retryHidden40 = await page.evaluate(() => document.querySelector('#assistantRetry').classList.contains('hidden'));
+  assert(retryHidden40 === true, '不可重试错误应隐藏重试按钮');
+  const goSettings40 = await page.evaluate(() => Boolean(document.querySelector('.assistant-error [data-assistant-action="go-settings"]')));
+  assert(goSettings40 === true, '未配置错误应提供前往设置按钮');
+
+  await saveAi(page, { endpoint: mockEndpoint, model });
+  await resetAssistant(page, 'ready');
+  const warning40b = await page.evaluate(() => ({
+    config: document.querySelector('#assistantConfigWarning').dataset.config,
+    hidden: document.querySelector('#assistantConfigWarning').classList.contains('hidden')
+  }));
+  assert(warning40b.config === 'ready' && warning40b.hidden === true, `恢复配置后提示应隐藏：${JSON.stringify(warning40b)}`);
+
+  await mock.resetMock();
+  await assistantInput(page, 'MOCK_500');
+  await submitAssistant(page);
+  await waitAssistant(page, '.assistant-error');
+  assert(mock.requests.length === 1, `可重试错误应请求一次，实际 ${mock.requests.length}`);
+  const retryVisible40 = await page.evaluate(() => !document.querySelector('#assistantRetry').classList.contains('hidden'));
+  assert(retryVisible40 === true, '可重试错误应显示重试按钮');
+  await page.click('#assistantRetry');
+  for (let index = 0; index < 100 && mock.requests.length < 2; index += 1) await new Promise(resolve => setTimeout(resolve, 50));
+  await page.waitForFunction(() => document.querySelector('#assistantSubmit').innerText.trim() === '解析', null, { timeout: 5000 });
+  assert(mock.requests.length === 2, `重试应再请求一次，实际 ${mock.requests.length}`);
+  assert(await page.evaluate(() => Boolean(document.querySelector('.assistant-error'))), '重试后仍应显示错误');
+
+  await page.evaluate(() => {
+    const input = document.querySelector('#assistantInput');
+    input.value = 'x'.repeat(3001);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  const counter40 = await page.evaluate(() => ({
+    text: document.querySelector('#assistantCounter').innerText.trim(),
+    over: document.querySelector('#assistantCounter').classList.contains('over')
+  }));
+  assert(counter40.text === '3001 / 3000' && counter40.over === true, `超长输入计数样式不正确：${JSON.stringify(counter40)}`);
+  await submitAssistant(page);
+  await waitAssistantText(page, '#assistantResult', '3000');
+  assert(mock.requests.length === 2, '超长输入应在本地拦截，不得发起请求');
+  passCheck(40);
+
+  await mock.resetMock();
+  await assistantInput(page, 'MOCK_UI_XSS');
+  await submitAssistant(page);
+  await waitAssistant(page, '[data-row-id="c0"]');
+  const xss41 = await page.evaluate(() => ({
+    xss: window.__xss,
+    img: document.querySelectorAll('#assistantResult img').length,
+    script: document.querySelectorAll('#assistantResult script').length,
+    text: document.querySelector('#assistantResult').innerText
+  }));
+  assert(xss41.xss === undefined, '候选文本不应执行脚本');
+  assert(xss41.img === 0 && xss41.script === 0, '结果区不应插入 img/script 元素');
+  assert(xss41.text.includes('<img'), `结果区应以纯文本呈现转义后的标题：${xss41.text}`);
+  const originalTitle41 = await page.evaluate(() => document.querySelector('[data-row-id="c0"] input[data-assistant-field="title"]').value);
+  assert(originalTitle41 === '<img src=x onerror="window.__xss=1">X', `标题原文不正确：${originalTitle41}`);
+  await page.fill('[data-row-id="c0"] input[data-assistant-field="title"]', `${originalTitle41}改`);
+  await submitAssistant(page);
+  await waitAssistant(page, '#confirmModal.open');
+  const confirmTitle41 = await page.innerText('#confirmTitle');
+  assert(confirmTitle41 === '替换当前预览？', `替换预览确认标题不正确：${confirmTitle41}`);
+  assert(mock.requests.length === 1, '确认替换前不得发起新请求');
+  await page.click('#confirmCancel');
+  const keptPreview41 = await page.evaluate(() => Boolean(document.querySelector('[data-row-id="c0"]')));
+  assert(keptPreview41 === true && mock.requests.length === 1, '取消替换后应保留预览且不请求');
+  await submitAssistant(page);
+  await waitAssistant(page, '#confirmModal.open');
+  await page.click('#confirmAccept');
+  for (let index = 0; index < 100 && mock.requests.length < 2; index += 1) await new Promise(resolve => setTimeout(resolve, 50));
+  await waitAssistant(page, '[data-row-id="c0"]');
+  const restoredTitle41 = await page.evaluate(() => document.querySelector('[data-row-id="c0"] input[data-assistant-field="title"]').value);
+  assert(mock.requests.length === 2, `确认替换后应重新请求，实际 ${mock.requests.length}`);
+  assert(restoredTitle41 === originalTitle41, `替换后标题应恢复为模型原值：${restoredTitle41}`);
+  passCheck(41);
+  await page.click('.nav-item[data-page="settings"]');
 }
 
 (async () => {
@@ -773,6 +1644,7 @@ async function runStageE(electronApp, mock, pageErrors) {
 
     const stageEStatements = [
       { sql: 'DELETE FROM items' },
+      { sql: "DELETE FROM sqlite_sequence WHERE name = 'items'" },
       {
         sql: "INSERT INTO settings (key, value) VALUES ('ai_api_key', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         params: [apiKey]
@@ -791,6 +1663,11 @@ async function runStageE(electronApp, mock, pageErrors) {
     await stopApp(electronApp);
     electronApp = null;
 
+    electronApp = await launchApp();
+    await runStageF(electronApp, mock, pageErrors);
+    await stopApp(electronApp);
+    electronApp = null;
+
     assert(pageErrors.length === 0, `页面异常应为空，实际 ${JSON.stringify(pageErrors)}`);
     passCheck(24);
 
@@ -798,7 +1675,7 @@ async function runStageE(electronApp, mock, pageErrors) {
       .filter(key => passed.has(key))
       .sort((a, b) => Number(a) - Number(b))
       .map(key => `${key}. ${CHECK_TITLES[key]}`);
-    assert(checks.length === 30, `断言数量应为 30，实际 ${checks.length}`);
+    assert(checks.length === 41, `断言数量应为 41，实际 ${checks.length}`);
     console.log(JSON.stringify({ passed: true, checks }));
   } finally {
     if (electronApp) await stopApp(electronApp);

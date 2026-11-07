@@ -26,6 +26,7 @@
       </nav>
 
       <div class="sidebar-bottom">
+        <button class="nav-item" data-page="assistant"><span data-icon="assistant"></span><span>助手</span></button>
         <button class="nav-item" data-page="settings"><span data-icon="settings"></span><span>设置</span></button>
         <div class="storage-summary">
           <span>本地数据</span>
@@ -216,6 +217,38 @@
           <div class="habit-archived hidden" id="habitArchivedSection">
             <button type="button" class="habit-archived-toggle" id="habitArchivedToggle">已归档（0）</button>
             <div class="habit-archived-list hidden" id="habitArchivedList"></div>
+          </div>
+        </section>
+
+        <section class="page" data-page-view="assistant">
+          <div class="page-heading">
+            <div>
+              <h1>助手</h1>
+              <p>用一段话描述要新增、修改、删除或查询的事项；写入操作会先预览，确认后才保存。</p>
+            </div>
+          </div>
+          <div class="assistant-layout">
+            <section class="panel assistant-composer">
+              <div class="assistant-config-warning hidden" id="assistantConfigWarning" role="status" data-config="pending">
+                <span data-icon="info"></span>
+                <div><strong>尚未完成 AI 配置</strong><p>请先在设置页填写接口地址、API Key 与模型名。</p></div>
+                <button class="secondary-button" id="assistantGoSettings">前往设置</button>
+              </div>
+              <label class="field assistant-input-field">
+                <span>要处理什么</span>
+                <textarea id="assistantInput" rows="5" placeholder="例如：下周要交数据库课设，周五前还要报名校辩论赛"></textarea>
+              </label>
+              <div class="assistant-meta">
+                <span class="assistant-counter" id="assistantCounter">0 / 3000</span>
+                <p class="assistant-privacy">使用助手时，当前输入、当前本地日期/星期/时刻与事项摘要（编号、标题、类型、截止时间、状态）会发送到你配置的第三方接口；事项说明、附件文件、日记与打卡数据不会发送。</p>
+              </div>
+              <div class="assistant-actions">
+                <button class="primary-button" id="assistantSubmit"><span data-icon="check"></span>解析</button>
+                <button class="secondary-button hidden" id="assistantRetry">重试</button>
+              </div>
+            </section>
+            <section class="panel assistant-result" id="assistantResult" aria-live="polite"></section>
+            <section class="assistant-records hidden" id="assistantRecords"></section>
           </div>
         </section>
 
