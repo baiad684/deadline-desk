@@ -907,13 +907,28 @@ function createBackupArchive(destination) {
   return new Promise((resolve, reject) => {
     const paths = getPaths();
     database.persist();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deadline-desk-backup-'));
+    const tempDatabase = path.join(tempDir, 'deadline-desk.db');
+    const cleanup = () => fs.rmSync(tempDir, { recursive: true, force: true });
+    try {
+      const copy = new SQL.Database(fs.readFileSync(paths.database));
+      copy.run('PRAGMA secure_delete = ON');
+      copy.run(`DELETE FROM settings WHERE key = '${AI_SETTING_KEYS.apiKey}'`);
+      copy.run('VACUUM');
+      fs.writeFileSync(tempDatabase, Buffer.from(copy.export()));
+      copy.close();
+    } catch (error) {
+      cleanup();
+      reject(error);
+      return;
+    }
     const output = fs.createWriteStream(destination);
     const archive = archiver('zip', { zlib: { level: 9 } });
-    output.on('close', resolve);
-    output.on('error', reject);
-    archive.on('error', reject);
+    output.on('close', () => { cleanup(); resolve(); });
+    output.on('error', error => { cleanup(); reject(error); });
+    archive.on('error', error => { cleanup(); reject(error); });
     archive.pipe(output);
-    archive.file(paths.database, { name: 'deadline-desk.db' });
+    archive.file(tempDatabase, { name: 'deadline-desk.db' });
     archive.directory(paths.attachments, 'attachments');
     archive.append(JSON.stringify({ app: 'Deadline Desk', version: 1, createdAt: new Date().toISOString() }, null, 2), { name: 'manifest.json' });
     archive.finalize();
@@ -934,6 +949,8 @@ async function restoreBackupArchive(source) {
     verification.close();
     if (!table) throw new Error('备份数据库无效');
 
+    const localApiKey = readAiConfig().apiKey;
+
     const paths = getPaths();
     database.close();
     fs.copyFileSync(backupDatabase, paths.database);
@@ -942,6 +959,10 @@ async function restoreBackupArchive(source) {
     const backupAttachments = path.join(tempDir, 'attachments');
     if (fs.existsSync(backupAttachments)) fs.cpSync(backupAttachments, paths.attachments, { recursive: true });
     await initializeDatabase();
+    database.prepare('DELETE FROM settings WHERE key = ?').run(AI_SETTING_KEYS.apiKey);
+    database.exec('VACUUM');
+    if (localApiKey) setSetting(AI_SETTING_KEYS.apiKey, localApiKey);
+    database.persist();
     notifyWidgets();
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });

@@ -2303,7 +2303,13 @@ function bindEvents() {
     const confirmed = await askConfirmation('从备份恢复？', '恢复会覆盖当前全部事项、附件和日记。建议先导出当前数据备份。', '选择备份');
     if (!confirmed) return;
     const restored = await execute(() => api.data.restore());
-    if (restored) { showToast('备份已恢复'); state.diaryDates = new Set(); await Promise.all([refreshItems(), refreshHabits()]); }
+    if (restored) {
+      showToast('备份已恢复');
+      state.diaryDates = new Set();
+      await Promise.all([refreshItems(), refreshHabits()]);
+      await refreshAssistantConfig();
+      renderAiSettings();
+    }
   });
   $('#clearDataButton').addEventListener('click', async () => {
     const first = await askConfirmation('清空全部数据？', '所有事项、附件和日记将被永久删除。此操作无法撤销。', '继续');

@@ -2,6 +2,8 @@ const { _electron: electron } = require('playwright-core');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
+const archiver = require('archiver');
+const extract = require('extract-zip');
 
 const projectDir = path.resolve(__dirname, '..');
 const dataDir = path.join(projectDir, 'test-output', 'assistant-data');
@@ -12,6 +14,14 @@ const apiKey = 'sk-test-1234567890abcd';
 const expectedKeyMask = 'sk-t••••abcd';
 const NEW_API_KEY = 'sk-ui-new-key-0987654321';
 const NEW_KEY_MASK = 'sk-u••••4321';
+const BACKUP_ENDPOINT = 'https://api.backup.example/v1/chat/completions';
+const BACKUP_MODEL = 'backup-model';
+const BACKUP_KEY = 'sk-backup-key-111111';
+const BACKUP_KEY_MASK = 'sk-b••••1111';
+const STAGE_H_BACKUP = path.join(outputDir, 'stage-h-backup.zip');
+const STAGE_H_RESTORE = path.join(outputDir, 'stage-h-restore.zip');
+const STAGE_H_EXTRACT = path.join(outputDir, 'stage-h-extract');
+const STAGE_H_DB = path.join(STAGE_H_EXTRACT, 'deadline-desk.db');
 
 let mockEndpoint = '';
 
@@ -62,7 +72,10 @@ const CHECK_TITLES = {
   44: '设置页：保存新 Key 与模型、助手提示同步',
   45: '设置页：不完整配置允许保存与状态联动',
   46: '设置页：非法接口地址错误提示且不落库',
-  47: '设置页：明文 Key 不泄露、不写 localStorage'
+  47: '设置页：明文 Key 不泄露、不写 localStorage',
+  48: '备份：导出 zip 剔除 Key、保留地址/模型与 manifest',
+  49: '恢复：备份 Key 被忽略、本机 Key 回填且清空数据后保留',
+  50: '恢复：本机无 Key 时不引入备份 Key 且不落盘'
 };
 
 const passed = new Set();
@@ -445,21 +458,97 @@ function waitAssistantConfig(page, expected = 'ready') {
 }
 
 function waitToast(page, text) {
-  return page.waitForFunction(
-    value => {
-      const toast = document.querySelector('#toast');
-      return toast.classList.contains('show') && document.querySelector('#toastText').innerText.trim().includes(value);
-    },
-    text,
-    { timeout: 5000 }
-  );
+  return pollPage(page, value => {
+    const toast = document.querySelector('#toast');
+    return Boolean(toast && toast.classList.contains('show') && document.querySelector('#toastText').innerText.trim().includes(value));
+  }, text, '等待提示超时');
 }
 
 function waitSettingsReady(page) {
-  return page.waitForFunction(
-    () => document.querySelector('#aiSettingsStatus')?.dataset.aiStatus === 'ready',
-    null,
-    { timeout: 5000 }
+  return pollPage(page, () => document.querySelector('#aiSettingsStatus')?.dataset.aiStatus === 'ready', undefined, '等待设置页配置就绪超时');
+}
+
+async function patchSaveDialog(electronApp, target) {
+  await electronApp.evaluate(({ dialog }, filePath) => {
+    dialog.showSaveDialog = Object.assign(async () => ({ canceled: false, filePath }), { __probePatched: true });
+  }, target);
+  const patched = await electronApp.evaluate(({ dialog }) => dialog.showSaveDialog.__probePatched === true);
+  if (!patched) throw new Error('无法替换保存对话框');
+}
+
+async function patchOpenDialog(electronApp, target) {
+  await electronApp.evaluate(({ dialog }, filePath) => {
+    dialog.showOpenDialog = Object.assign(async () => ({ canceled: false, filePaths: [filePath] }), { __probePatched: true });
+  }, target);
+  const patched = await electronApp.evaluate(({ dialog }) => dialog.showOpenDialog.__probePatched === true);
+  if (!patched) throw new Error('无法替换打开对话框');
+}
+
+function waitSettingsLoaded(page, endpoint) {
+  return pollPage(page, value => document.querySelector('#aiEndpointInput')?.value === value, endpoint, '等待设置页表单超时');
+}
+
+async function pollPage(page, predicate, arg, timeoutMessage = '等待页面条件超时', timeout = 5000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (await page.evaluate(predicate, arg)) return;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  throw new Error(timeoutMessage);
+}
+
+let sqlJsPromise = null;
+
+function loadSqlJs() {
+  if (!sqlJsPromise) {
+    const initSqlJs = require('sql.js');
+    sqlJsPromise = initSqlJs({ locateFile: file => path.join(projectDir, 'node_modules', 'sql.js', 'dist', file) });
+  }
+  return sqlJsPromise;
+}
+
+async function readDbSettings(file) {
+  const SQL = await loadSqlJs();
+  const db = new SQL.Database(fs.readFileSync(file));
+  try {
+    const result = db.exec("SELECT key, value FROM settings WHERE key IN ('ai_endpoint','ai_model','ai_api_key')");
+    if (!result.length) return {};
+    return Object.fromEntries(result[0].values.map(row => [row[0], row[1]]));
+  } finally {
+    db.close();
+  }
+}
+
+function createZipArchive(destination, databaseFile, manifestText) {
+  return new Promise((resolve, reject) => {
+    const output = fs.createWriteStream(destination);
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    output.on('close', resolve);
+    output.on('error', reject);
+    archive.on('error', reject);
+    archive.pipe(output);
+    archive.file(databaseFile, { name: 'deadline-desk.db' });
+    archive.append(manifestText, { name: 'manifest.json' });
+    archive.finalize();
+  });
+}
+
+async function buildRestoreZip(sourceDbFile) {
+  const SQL = await loadSqlJs();
+  const db = new SQL.Database(fs.readFileSync(sourceDbFile));
+  const restoreDb = path.join(outputDir, 'stage-h-restore.db');
+  try {
+    db.run("UPDATE settings SET value = ? WHERE key = 'ai_endpoint'", [BACKUP_ENDPOINT]);
+    db.run("UPDATE settings SET value = ? WHERE key = 'ai_model'", [BACKUP_MODEL]);
+    db.run("INSERT INTO settings (key, value) VALUES ('ai_api_key', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [BACKUP_KEY]);
+    fs.writeFileSync(restoreDb, Buffer.from(db.export()));
+  } finally {
+    db.close();
+  }
+  await createZipArchive(
+    STAGE_H_RESTORE,
+    restoreDb,
+    JSON.stringify({ app: 'Deadline Desk', version: 1, createdAt: new Date().toISOString() })
   );
 }
 
@@ -1781,6 +1870,121 @@ async function runStageG(electronApp, mock, pageErrors) {
   passCheck(47);
 }
 
+async function runStageH(electronApp, mock, pageErrors) {
+  const page = await openStagePage(electronApp, pageErrors);
+  await new Promise(resolve => setTimeout(resolve, 400));
+  assert(fs.readFileSync(dbPath).includes(Buffer.from(NEW_API_KEY)) === true, '前置：本机数据库应保存本机 Key');
+
+  fs.rmSync(STAGE_H_BACKUP, { force: true });
+  await patchSaveDialog(electronApp, STAGE_H_BACKUP);
+  const requestsBefore48 = mock.requests.length;
+
+  await page.click('.nav-item[data-page="settings"]');
+  await waitSettingsReady(page);
+  await page.click('#backupButton');
+  await waitToast(page, '备份已保存');
+  assert(fs.existsSync(STAGE_H_BACKUP) === true, '备份文件应生成');
+  assert(mock.requests.length === requestsBefore48, `备份不应调用模型，实际 ${mock.requests.length}`);
+  await mock.resetMock();
+
+  fs.rmSync(STAGE_H_EXTRACT, { recursive: true, force: true });
+  fs.mkdirSync(STAGE_H_EXTRACT, { recursive: true });
+  await extract(STAGE_H_BACKUP, { dir: STAGE_H_EXTRACT });
+  assert(fs.existsSync(STAGE_H_DB) === true, '备份应包含数据库');
+  assert(fs.existsSync(path.join(STAGE_H_EXTRACT, 'manifest.json')) === true, '备份应包含 manifest');
+
+  const settings48 = await readDbSettings(STAGE_H_DB);
+  assert(settings48.ai_endpoint === mockEndpoint, `备份应保留接口地址：${JSON.stringify(settings48)}`);
+  assert(settings48.ai_model === model, `备份应保留模型名：${JSON.stringify(settings48)}`);
+  assert(settings48.ai_api_key === undefined, `备份不应包含 API Key：${JSON.stringify(settings48)}`);
+  assert(fs.readFileSync(STAGE_H_DB).includes(Buffer.from(NEW_API_KEY)) === false, '备份数据库不应包含 Key 字节');
+  const manifestText48 = fs.readFileSync(path.join(STAGE_H_EXTRACT, 'manifest.json'), 'utf8');
+  const manifest48 = JSON.parse(manifestText48);
+  assert(manifest48.app === 'Deadline Desk' && manifest48.version === 1, `manifest 不正确：${manifestText48}`);
+  assert(manifestText48.includes(NEW_API_KEY) === false, 'manifest 不应包含 Key');
+  passCheck(48);
+
+  await buildRestoreZip(STAGE_H_DB);
+  await patchOpenDialog(electronApp, STAGE_H_RESTORE);
+  await page.click('#restoreButton');
+  await waitAssistant(page, '#confirmModal.open');
+  await page.click('#confirmAccept');
+  await waitToast(page, '备份已恢复');
+  await waitSettingsLoaded(page, BACKUP_ENDPOINT);
+
+  const ai49 = await readAi(page);
+  assert(ai49.endpoint === BACKUP_ENDPOINT && ai49.model === BACKUP_MODEL, `恢复后应使用备份地址与模型：${JSON.stringify(ai49)}`);
+  assert(ai49.keyMask === NEW_KEY_MASK && ai49.configured === true, `恢复后应回填本机 Key：${JSON.stringify(ai49)}`);
+
+  const dom49 = await page.evaluate(() => ({
+    endpoint: document.querySelector('#aiEndpointInput').value,
+    model: document.querySelector('#aiModelInput').value,
+    mask: document.querySelector('#aiKeyMask').textContent.trim(),
+    keyHidden: document.querySelector('#aiKeyField').classList.contains('hidden'),
+    status: document.querySelector('#aiSettingsStatus').dataset.aiStatus,
+    statusText: document.querySelector('#aiSettingsStatus').textContent.trim()
+  }));
+  assert(dom49.endpoint === BACKUP_ENDPOINT, `接口地址表单未同步：${dom49.endpoint}`);
+  assert(dom49.model === BACKUP_MODEL, `模型表单未同步：${dom49.model}`);
+  assert(dom49.mask === `已保存（${NEW_KEY_MASK}）`, `Key 掩码表单未同步：${dom49.mask}`);
+  assert(dom49.keyHidden === true, 'Key 输入框应隐藏');
+  assert(dom49.status === 'ready' && dom49.statusText === '配置完整，助手页可用', `状态行未同步：${JSON.stringify(dom49)}`);
+  assert(mock.requests.length === 0, `恢复不应调用模型，实际 ${mock.requests.length}`);
+
+  await page.click('#clearDataButton');
+  await waitAssistant(page, '#confirmModal.open');
+  await page.click('#confirmAccept');
+  await pollPage(page, () => document.querySelector('#confirmTitle')?.textContent.trim() === '再次确认清空', undefined, '等待二次确认弹窗超时');
+  await page.click('#confirmAccept');
+  await waitToast(page, '全部数据已清空');
+
+  const ai49b = await readAi(page);
+  assert(ai49b.endpoint === BACKUP_ENDPOINT && ai49b.model === BACKUP_MODEL, `清空后配置应保留：${JSON.stringify(ai49b)}`);
+  assert(ai49b.keyMask === NEW_KEY_MASK && ai49b.configured === true, `清空后 Key 应保留：${JSON.stringify(ai49b)}`);
+  const dom49b = await page.evaluate(() => ({
+    endpoint: document.querySelector('#aiEndpointInput').value,
+    model: document.querySelector('#aiModelInput').value,
+    mask: document.querySelector('#aiKeyMask').textContent.trim(),
+    status: document.querySelector('#aiSettingsStatus').dataset.aiStatus
+  }));
+  assert(dom49b.endpoint === BACKUP_ENDPOINT && dom49b.model === BACKUP_MODEL, `清空后表单项变化：${JSON.stringify(dom49b)}`);
+  assert(dom49b.mask === `已保存（${NEW_KEY_MASK}）` && dom49b.status === 'ready', `清空后表单状态变化：${JSON.stringify(dom49b)}`);
+
+  await new Promise(resolve => setTimeout(resolve, 400));
+  assert(fs.readFileSync(dbPath).includes(Buffer.from(NEW_API_KEY)) === true, '恢复并清空后本机 Key 应落盘');
+  passCheck(49);
+}
+
+async function runStageH2(electronApp, mock, pageErrors) {
+  const page = await openStagePage(electronApp, pageErrors);
+  await patchOpenDialog(electronApp, STAGE_H_RESTORE);
+  await page.click('.nav-item[data-page="settings"]');
+  await waitSettingsLoaded(page, BACKUP_ENDPOINT);
+
+  await page.click('#restoreButton');
+  await waitAssistant(page, '#confirmModal.open');
+  await page.click('#confirmAccept');
+  await waitToast(page, '备份已恢复');
+  await waitSettingsLoaded(page, BACKUP_ENDPOINT);
+
+  const ai50 = await readAi(page);
+  assert(ai50.endpoint === BACKUP_ENDPOINT && ai50.model === BACKUP_MODEL, `无 Key 恢复后应使用备份地址与模型：${JSON.stringify(ai50)}`);
+  assert(ai50.keyMask === '' && ai50.configured === false, `无 Key 恢复后应保持未配置：${JSON.stringify(ai50)}`);
+
+  const dom50 = await page.evaluate(() => ({
+    mask: document.querySelector('#aiKeyMask').textContent.trim(),
+    status: document.querySelector('#aiSettingsStatus').dataset.aiStatus,
+    statusText: document.querySelector('#aiSettingsStatus').textContent.trim(),
+    endpoint: document.querySelector('#aiEndpointInput').value,
+    model: document.querySelector('#aiModelInput').value,
+    keyHidden: document.querySelector('#aiKeyField').classList.contains('hidden')
+  }));
+  assert(dom50.mask === '未设置', `无 Key 时掩码文案不正确：${dom50.mask}`);
+  assert(dom50.status === 'missing' && dom50.statusText === '配置不完整，助手功能不可用', `无 Key 时状态行不正确：${JSON.stringify(dom50)}`);
+  assert(dom50.endpoint === BACKUP_ENDPOINT && dom50.model === BACKUP_MODEL, `无 Key 恢复后表单未同步：${JSON.stringify(dom50)}`);
+  assert(dom50.keyHidden === true, 'Key 输入框应隐藏');
+}
+
 (async () => {
   fs.rmSync(dataDir, { recursive: true, force: true });
   fs.mkdirSync(outputDir, { recursive: true });
@@ -1863,6 +2067,21 @@ async function runStageG(electronApp, mock, pageErrors) {
     await stopApp(electronApp);
     electronApp = null;
 
+    electronApp = await launchApp();
+    await runStageH(electronApp, mock, pageErrors);
+    await stopApp(electronApp);
+    electronApp = null;
+
+    await mutateDb([{ sql: "DELETE FROM settings WHERE key = 'ai_api_key'" }]);
+    electronApp = await launchApp();
+    await runStageH2(electronApp, mock, pageErrors);
+    await stopApp(electronApp);
+    electronApp = null;
+    const settings50 = await readDbSettings(dbPath);
+    assert(settings50.ai_api_key === undefined, '恢复不应引入备份 Key');
+    assert(fs.readFileSync(dbPath).includes(Buffer.from(BACKUP_KEY)) === false, '备份 Key 不应残留在本机数据库');
+    passCheck(50);
+
     assert(pageErrors.length === 0, `页面异常应为空，实际 ${JSON.stringify(pageErrors)}`);
     passCheck(24);
 
@@ -1870,7 +2089,7 @@ async function runStageG(electronApp, mock, pageErrors) {
       .filter(key => passed.has(key))
       .sort((a, b) => Number(a) - Number(b))
       .map(key => `${key}. ${CHECK_TITLES[key]}`);
-    assert(checks.length === 47, `断言数量应为 47，实际 ${checks.length}`);
+    assert(checks.length === 50, `断言数量应为 50，实际 ${checks.length}`);
     console.log(JSON.stringify({ passed: true, checks }));
   } finally {
     if (electronApp) await stopApp(electronApp);

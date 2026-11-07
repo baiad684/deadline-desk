@@ -17,6 +17,10 @@ const vm = require('vm');
 const assert = require('node:assert/strict');
 const { describe, test, beforeEach } = require('node:test');
 
+const archiver = require('archiver');
+const extract = require('extract-zip');
+const initSqlJs = require('sql.js');
+
 const projectDir = path.resolve(__dirname, '..');
 const mainPath = path.join(projectDir, 'main.js');
 const preloadPath = path.join(projectDir, 'preload.js');
@@ -144,6 +148,85 @@ function planOptions(payload, allItems, overrides = {}) {
     now: overrides.now === undefined ? h.now() : overrides.now,
     omittedCount: overrides.omittedCount === undefined ? 0 : overrides.omittedCount
   };
+}
+
+// ---------- 备份 / 恢复 fixture ----------
+
+const BACKUP_ENDPOINT = 'https://api.backup.example/v1/chat/completions';
+const BACKUP_MODEL = 'backup-model';
+const BACKUP_KEY = 'sk-backup-key-111111';
+const BACKUP_KEY_MASK = 'sk-b••••1111';
+
+let sqlJsPromise = null;
+
+function loadSqlJs() {
+  if (!sqlJsPromise) {
+    sqlJsPromise = initSqlJs({ locateFile: file => path.join(projectDir, 'node_modules', 'sql.js', 'dist', file) });
+  }
+  return sqlJsPromise;
+}
+
+async function readSettingsFile(file) {
+  const SQL = await loadSqlJs();
+  const db = new SQL.Database(fs.readFileSync(file));
+  try {
+    const result = db.exec("SELECT key, value FROM settings WHERE key IN ('ai_endpoint','ai_model','ai_api_key')");
+    if (!result.length) return {};
+    return Object.fromEntries(result[0].values.map(row => [row[0], row[1]]));
+  } finally {
+    db.close();
+  }
+}
+
+function createZipArchive(destination, files) {
+  return new Promise((resolve, reject) => {
+    const output = fs.createWriteStream(destination);
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    output.on('close', resolve);
+    output.on('error', reject);
+    archive.on('error', reject);
+    archive.pipe(output);
+    archive.file(files.database, { name: 'deadline-desk.db' });
+    archive.append(files.manifest, { name: 'manifest.json' });
+    archive.finalize();
+  });
+}
+
+async function createBackupFixture(destination, options) {
+  const SQL = await loadSqlJs();
+  const databaseFile = `${destination}.db`;
+  const db = new SQL.Database();
+  try {
+    db.exec(`
+      CREATE TABLE items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        deadline TEXT NOT NULL,
+        status TEXT NOT NULL,
+        work_type TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    `);
+    db.run('INSERT INTO settings (key, value) VALUES (?, ?)', ['ai_endpoint', options.endpoint]);
+    db.run('INSERT INTO settings (key, value) VALUES (?, ?)', ['ai_model', options.model]);
+    db.run('INSERT INTO settings (key, value) VALUES (?, ?)', ['ai_api_key', options.apiKey]);
+    db.run(
+      'INSERT INTO items (kind, title, description, deadline, status, work_type) VALUES (?, ?, ?, ?, ?, ?)',
+      ['assignment', options.title, '', `${localDate(1)} 23:59`, 'not_started', 'personal']
+    );
+    fs.writeFileSync(databaseFile, Buffer.from(db.export()));
+  } finally {
+    db.close();
+  }
+  await createZipArchive(destination, {
+    database: databaseFile,
+    manifest: JSON.stringify({ app: 'Deadline Desk', version: 1, createdAt: '2026-11-07T00:00:00.000Z' })
+  });
 }
 
 // ---------- 内存版 database ----------
@@ -3494,7 +3577,8 @@ describe('助手后端单元测试（detail_v1）', () => {
       for (const token of ['会发送到你配置的第三方接口', '不会发送', '编号、标题、类型、截止时间、状态', '事项说明、附件文件、日记', '只显示掩码']) {
         assert.ok(privacy.includes(token), `隐私说明缺少「${token}」`);
       }
-      assert.ok(!privacy.includes('不随备份打包'), 'R5 之前隐私说明不应提备份排除');
+      assert.ok(privacy.includes('不随导出备份打包'), '隐私说明应说明 Key 不随导出备份');
+      assert.ok(privacy.includes('恢复备份时保留本机 Key'), '隐私说明应说明恢复时保留本机 Key');
     });
 
     test('F20.4 静态安全：不含内联事件处理器、内联 style，修改按钮为 type="button"', () => {
@@ -3503,6 +3587,258 @@ describe('助手后端单元测试（detail_v1）', () => {
       const editTag = tagOfIn(aiGroup, 'aiKeyEditButton');
       assert.ok(editTag.startsWith('<button'));
       assert.ok(editTag.includes('type="button"'));
+    });
+  });
+
+  // ============ F21 备份 / 恢复的 AI Key 治理 ============
+
+  async function withRealDatabase(run) {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deadline-desk-backup-test-'));
+    const previous = process.env.DEADLINE_DESK_DATA_DIR;
+    process.env.DEADLINE_DESK_DATA_DIR = dataDir;
+    try {
+      await h.fn('initializeDatabase')();
+      const realDb = h.evalIn('database');
+      await run({ realDb, dataDir });
+    } finally {
+      const current = h.evalIn('database');
+      if (current && current.open) current.close();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+      if (previous === undefined) delete process.env.DEADLINE_DESK_DATA_DIR;
+      else process.env.DEADLINE_DESK_DATA_DIR = previous;
+    }
+  }
+
+  function seedLocalDatabase(host) {
+    const { realDb } = host;
+    realDb.prepare('INSERT INTO items (kind, title, description, deadline, status, work_type) VALUES (?, ?, ?, ?, ?, ?)')
+      .run('assignment', '本机事项', '', `${localDate(1)} 23:59`, 'not_started', 'personal');
+  }
+
+  describe('F21 备份 / 恢复的 AI Key 治理', () => {
+    test('F21.1 导出备份剔除 Key、保留地址/模型与 manifest，且不影响本机配置', async () => {
+      await withRealDatabase(async host => {
+        const { realDb, dataDir } = host;
+        h.fn('setSetting')('ai_endpoint', MOCK_ENDPOINT);
+        h.fn('setSetting')('ai_model', MODEL);
+        h.fn('setSetting')('ai_api_key', KEY);
+        seedLocalDatabase(host);
+        realDb.persist();
+
+        const dbFile = h.fn('getPaths')().database;
+        assert.equal(fs.readFileSync(dbFile).includes(Buffer.from(KEY)), true, '前置：本机数据库应包含 Key 字节');
+
+        const localConfig = plain(h.fn('readAiConfig')());
+        const localTitles = plain(realDb.prepare('SELECT title FROM items').all().map(row => row.title));
+
+        const backupPath = path.join(dataDir, 'backup.zip');
+        const zipDir = path.join(dataDir, 'unzipped');
+        await h.fn('createBackupArchive')(backupPath);
+        fs.mkdirSync(zipDir, { recursive: true });
+        await extract(backupPath, { dir: zipDir });
+        assert.equal(fs.existsSync(path.join(zipDir, 'deadline-desk.db')), true, '备份应包含数据库');
+        assert.equal(fs.existsSync(path.join(zipDir, 'manifest.json')), true, '备份应包含 manifest');
+
+        const settings = await readSettingsFile(path.join(zipDir, 'deadline-desk.db'));
+        assert.equal(settings.ai_endpoint, MOCK_ENDPOINT);
+        assert.equal(settings.ai_model, MODEL);
+        assert.equal(settings.ai_api_key, undefined);
+
+        assert.equal(fs.readFileSync(path.join(zipDir, 'deadline-desk.db')).includes(Buffer.from(KEY)), false, '备份数据库不应包含 Key 字节');
+        const manifestText = fs.readFileSync(path.join(zipDir, 'manifest.json'), 'utf8');
+        const manifest = JSON.parse(manifestText);
+        assert.equal(manifest.app, 'Deadline Desk');
+        assert.equal(manifest.version, 1);
+        assert.equal(manifestText.includes(KEY), false, 'manifest 不应包含 Key');
+
+        assert.equal(plain(h.fn('readAiConfig')()).apiKey, KEY, '导出不应改动本机 Key');
+        assert.equal(h.fn('buildAiSettingsView')().keyMask, KEY_MASK, '导出不应改动本机掩码');
+        assert.deepEqual(plain(h.fn('readAiConfig')()), localConfig, '导出不应改动本机 AI 配置');
+        assert.deepEqual(plain(realDb.prepare('SELECT title FROM items').all().map(row => row.title)), localTitles, '导出不应改动本机事项');
+        assert.equal(fs.readFileSync(dbFile).includes(Buffer.from(KEY)), true, '导出后本机数据库仍应保留 Key 字节');
+      });
+    });
+
+    test('F21.2 恢复备份忽略备份 Key、回填本机 Key，并覆盖事项', async () => {
+      await withRealDatabase(async host => {
+        const { dataDir } = host;
+        h.fn('setSetting')('ai_api_key', KEY);
+        seedLocalDatabase(host);
+
+        const fixtureZip = path.join(dataDir, 'fixture.zip');
+        await createBackupFixture(fixtureZip, {
+          endpoint: BACKUP_ENDPOINT,
+          model: BACKUP_MODEL,
+          apiKey: BACKUP_KEY,
+          title: '备份事项'
+        });
+        await h.fn('restoreBackupArchive')(fixtureZip);
+
+        assert.deepEqual(plain(h.fn('readAiConfig')()), { endpoint: BACKUP_ENDPOINT, model: BACKUP_MODEL, apiKey: KEY });
+        const view = plain(h.fn('buildAiSettingsView')());
+        assert.equal(view.configured, true);
+        assert.equal(view.keyMask, KEY_MASK);
+
+        const restoredDb = h.evalIn('database');
+        assert.deepEqual(plain(restoredDb.prepare('SELECT title FROM items').all().map(row => row.title)), ['备份事项']);
+
+        const dbFile = h.fn('getPaths')().database;
+        assert.equal(fs.readFileSync(dbFile).includes(Buffer.from(KEY)), true, '恢复后应落盘本机 Key');
+        assert.equal(fs.readFileSync(dbFile).includes(Buffer.from(BACKUP_KEY)), false, '备份 Key 不应在磁盘残留');
+      });
+    });
+
+    test('F21.3 本机无 Key 时恢复后保持未配置', async () => {
+      await withRealDatabase(async host => {
+        const { dataDir } = host;
+        h.fn('setSetting')('ai_endpoint', MOCK_ENDPOINT);
+        h.fn('setSetting')('ai_model', MODEL);
+
+        const fixtureZip = path.join(dataDir, 'fixture.zip');
+        await createBackupFixture(fixtureZip, {
+          endpoint: BACKUP_ENDPOINT,
+          model: BACKUP_MODEL,
+          apiKey: BACKUP_KEY,
+          title: '备份事项'
+        });
+        await h.fn('restoreBackupArchive')(fixtureZip);
+
+        const config = plain(h.fn('readAiConfig')());
+        assert.equal(config.endpoint, BACKUP_ENDPOINT);
+        assert.equal(config.model, BACKUP_MODEL);
+        assert.equal(config.apiKey, '');
+        const view = plain(h.fn('buildAiSettingsView')());
+        assert.equal(view.configured, false);
+        assert.equal(view.keyMask, '');
+
+        const dbFile = h.fn('getPaths')().database;
+        assert.equal(fs.readFileSync(dbFile).includes(Buffer.from(BACKUP_KEY)), false, '备份 Key 不应落盘');
+        const settings = await readSettingsFile(dbFile);
+        assert.equal(settings.ai_api_key, undefined);
+      });
+    });
+
+    test('F21.4 清空全部数据不影响 AI 配置', async () => {
+      await withRealDatabase(async ({ realDb }) => {
+        h.fn('setSetting')('ai_endpoint', MOCK_ENDPOINT);
+        h.fn('setSetting')('ai_model', MODEL);
+        h.fn('setSetting')('ai_api_key', KEY);
+        realDb.prepare('INSERT INTO items (kind, title, description, deadline, status, work_type) VALUES (?, ?, ?, ?, ?, ?)')
+          .run('assignment', '本机事项', '', `${localDate(1)} 23:59`, 'not_started', 'personal');
+
+        const before = plain(h.fn('readAiConfig')());
+        const beforeView = plain(h.fn('buildAiSettingsView')());
+        await h.call('data:clear', h.mainEvent);
+
+        assert.deepEqual(plain(h.fn('readAiConfig')()), before);
+        assert.deepEqual(plain(h.fn('buildAiSettingsView')()), beforeView);
+        assert.deepEqual(plain(realDb.prepare('SELECT id FROM items').all()), []);
+      });
+    });
+
+    test('F21.5 备份校验失败时抛出错误且不读取、不修改本机 Key 与事项', async () => {
+      await withRealDatabase(async host => {
+        const { realDb, dataDir } = host;
+        h.fn('setSetting')('ai_endpoint', MOCK_ENDPOINT);
+        h.fn('setSetting')('ai_model', MODEL);
+        h.fn('setSetting')('ai_api_key', KEY);
+        seedLocalDatabase(host);
+        realDb.persist();
+
+        const dbFile = h.fn('getPaths')().database;
+        const localConfig = plain(h.fn('readAiConfig')());
+
+        // 数据库合法但 manifest 不符版本契约，恢复应在读取本机 Key 之前终止
+        const fixtureZip = path.join(dataDir, 'fixture.zip');
+        await createBackupFixture(fixtureZip, {
+          endpoint: BACKUP_ENDPOINT,
+          model: BACKUP_MODEL,
+          apiKey: BACKUP_KEY,
+          title: '备份事项'
+        });
+        const invalidZip = path.join(dataDir, 'invalid-manifest.zip');
+        await createZipArchive(invalidZip, {
+          database: `${fixtureZip}.db`,
+          manifest: JSON.stringify({ app: 'Other App', version: 1 })
+        });
+
+        const error = await captureRejection(h.fn('restoreBackupArchive')(invalidZip));
+        assert.equal(error.message, '备份版本不受支持');
+
+        assert.deepEqual(plain(h.fn('readAiConfig')()), localConfig, '校验失败不应改动本机 AI 配置');
+        assert.deepEqual(plain(realDb.prepare('SELECT title FROM items').all().map(row => row.title)), ['本机事项'], '校验失败不应覆盖本机事项');
+        assert.equal(fs.readFileSync(dbFile).includes(Buffer.from(KEY)), true, '校验失败后本机 Key 应仍在磁盘');
+        assert.equal(fs.readFileSync(dbFile).includes(Buffer.from(BACKUP_KEY)), false, '校验失败不应写入备份 Key');
+      });
+    });
+
+    test('F21.6 备份缺少地址与模型时恢复按空值计算且仍回填本机 Key', async () => {
+      await withRealDatabase(async host => {
+        const { realDb, dataDir } = host;
+        h.fn('setSetting')('ai_endpoint', MOCK_ENDPOINT);
+        h.fn('setSetting')('ai_model', MODEL);
+        h.fn('setSetting')('ai_api_key', KEY);
+        realDb.persist();
+
+        const fixtureZip = path.join(dataDir, 'fixture.zip');
+        await createBackupFixture(fixtureZip, {
+          endpoint: BACKUP_ENDPOINT,
+          model: BACKUP_MODEL,
+          apiKey: BACKUP_KEY,
+          title: '备份事项'
+        });
+        const SQL = await loadSqlJs();
+        const db = new SQL.Database(fs.readFileSync(`${fixtureZip}.db`));
+        try {
+          db.run("DELETE FROM settings WHERE key IN ('ai_endpoint','ai_model')");
+          fs.writeFileSync(`${fixtureZip}.db`, Buffer.from(db.export()));
+        } finally {
+          db.close();
+        }
+        await createZipArchive(fixtureZip, {
+          database: `${fixtureZip}.db`,
+          manifest: JSON.stringify({ app: 'Deadline Desk', version: 1, createdAt: '2026-11-07T00:00:00.000Z' })
+        });
+
+        await h.fn('restoreBackupArchive')(fixtureZip);
+
+        const config = plain(h.fn('readAiConfig')());
+        assert.equal(config.endpoint, '', '备份缺少地址时恢复后按空值计算');
+        assert.equal(config.model, '', '备份缺少模型时恢复后按空值计算');
+        assert.equal(config.apiKey, KEY, '本机 Key 仍应回填');
+        const view = plain(h.fn('buildAiSettingsView')());
+        assert.equal(view.configured, false);
+        assert.equal(view.keyMask, KEY_MASK);
+
+        const dbFile = h.fn('getPaths')().database;
+        const settings = await readSettingsFile(dbFile);
+        assert.equal(settings.ai_endpoint, undefined);
+        assert.equal(settings.ai_model, undefined);
+        assert.equal(settings.ai_api_key, KEY);
+        assert.equal(fs.readFileSync(dbFile).includes(Buffer.from(BACKUP_KEY)), false, '备份 Key 不应落盘');
+      });
+    });
+  });
+
+  // ============ F22 需求文档 v1.15 ============
+
+  describe('F22 需求文档 v1.15', () => {
+    const doc = fs.readFileSync(path.join(projectDir, 'docs/需求文档.md'), 'utf8');
+
+    test('F22.1 v1.15 版本行', () => {
+      assert.ok(doc.split(/\r?\n/)[0].includes('# 「截止线」· 需求文档（v1.15'), '标题应升级到 v1.15');
+      assert.ok(doc.includes('更新日期：2026-11-07（v1.15'), '更新日期应写明 v1.15');
+    });
+
+    test('F22.2 模块 7、导航与离线表述', () => {
+      assert.ok(doc.includes('### 模块 7：助手'), '应包含模块 7 助手');
+      assert.ok(doc.includes('今天 / 日记 / 日常 / 大作业 / 活动 / 逾期 / 统计 / 助手'), '导航顺序应包含助手');
+      assert.ok(doc.includes('「助手」页需要联网调用用户自行配置的在线模型'), '离线表述应说明助手页需联网');
+    });
+
+    test('F22.3 确认清单与模块边界', () => {
+      assert.ok(doc.includes('| 24 | 助手模块（v1.15）'), '确认清单应包含第 24 条');
+      assert.ok(doc.includes('仅新增「助手」1 个模块'), '模块边界应写明仅新增助手 1 个模块');
     });
   });
 });
