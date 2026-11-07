@@ -10,6 +10,8 @@ const dbPath = path.join(dataDir, 'deadline-desk.db');
 const model = 'mock-model';
 const apiKey = 'sk-test-1234567890abcd';
 const expectedKeyMask = 'sk-t••••abcd';
+const NEW_API_KEY = 'sk-ui-new-key-0987654321';
+const NEW_KEY_MASK = 'sk-u••••4321';
 
 let mockEndpoint = '';
 
@@ -54,7 +56,13 @@ const CHECK_TITLES = {
   38: '查询：答复、口径与零写入',
   39: '生命周期：输入保留、离开清空与晚到响应',
   40: '错误：未配置、可重试与超长拦截',
-  41: '安全：文本转义与替换预览确认'
+  41: '安全：文本转义与替换预览确认',
+  42: '设置页：AI 分组结构、顺序与初始掩码',
+  43: '设置页：修改 Key、留空保持旧 Key',
+  44: '设置页：保存新 Key 与模型、助手提示同步',
+  45: '设置页：不完整配置允许保存与状态联动',
+  46: '设置页：非法接口地址错误提示且不落库',
+  47: '设置页：明文 Key 不泄露、不写 localStorage'
 };
 
 const passed = new Set();
@@ -432,6 +440,25 @@ function waitAssistantConfig(page, expected = 'ready') {
   return page.waitForFunction(
     value => document.querySelector('#assistantConfigWarning')?.dataset.config === value,
     expected,
+    { timeout: 5000 }
+  );
+}
+
+function waitToast(page, text) {
+  return page.waitForFunction(
+    value => {
+      const toast = document.querySelector('#toast');
+      return toast.classList.contains('show') && document.querySelector('#toastText').innerText.trim().includes(value);
+    },
+    text,
+    { timeout: 5000 }
+  );
+}
+
+function waitSettingsReady(page) {
+  return page.waitForFunction(
+    () => document.querySelector('#aiSettingsStatus')?.dataset.aiStatus === 'ready',
+    null,
     { timeout: 5000 }
   );
 }
@@ -1591,6 +1618,169 @@ async function runStageF(electronApp, mock, pageErrors) {
   await page.click('.nav-item[data-page="settings"]');
 }
 
+async function runStageG(electronApp, mock, pageErrors) {
+  const page = await openStagePage(electronApp, pageErrors);
+  await mock.resetMock();
+  await page.click('.nav-item[data-page="settings"]');
+  await waitSettingsReady(page);
+
+  const initial42 = await page.evaluate(() => ({
+    headings: [...document.querySelectorAll('[data-page-view="settings"] .settings-group h2')].map(node => node.textContent.trim()),
+    endpoint: document.querySelector('#aiEndpointInput').value,
+    endpointType: document.querySelector('#aiEndpointInput').type,
+    model: document.querySelector('#aiModelInput').value,
+    modelMax: document.querySelector('#aiModelInput').maxLength,
+    mask: document.querySelector('#aiKeyMask').textContent.trim(),
+    keyHidden: document.querySelector('#aiKeyField').classList.contains('hidden'),
+    keyType: document.querySelector('#aiKeyInput').type,
+    keyMax: document.querySelector('#aiKeyInput').maxLength,
+    keyValue: document.querySelector('#aiKeyInput').value,
+    status: document.querySelector('#aiSettingsStatus').dataset.aiStatus,
+    statusText: document.querySelector('#aiSettingsStatus').textContent.trim()
+  }));
+  assert(initial42.headings.join(',') === '提醒,桌面小组件,AI 配置,备份与恢复,本地数据', `设置页分组顺序不正确：${initial42.headings.join(',')}`);
+  assert(initial42.endpoint === mockEndpoint && initial42.endpointType === 'url', `接口地址回填或类型不正确：${JSON.stringify(initial42)}`);
+  assert(initial42.model === model && initial42.modelMax === 200, `模型名回填或长度限制不正确：${JSON.stringify(initial42)}`);
+  assert(initial42.mask === `已保存（${expectedKeyMask}）`, `Key 掩码不正确：${initial42.mask}`);
+  assert(initial42.keyHidden === true && initial42.keyType === 'password' && initial42.keyMax === 4096 && initial42.keyValue === '', `Key 输入框初始态不正确：${JSON.stringify(initial42)}`);
+  assert(initial42.status === 'ready' && initial42.statusText === '配置完整，助手页可用', `状态行初始态不正确：${JSON.stringify(initial42)}`);
+  passCheck(42);
+
+  await page.click('#aiKeyEditButton');
+  const edit43 = await page.evaluate(() => ({
+    hidden: document.querySelector('#aiKeyField').classList.contains('hidden'),
+    visible: document.querySelector('#aiKeyInput').getClientRects().length > 0,
+    value: document.querySelector('#aiKeyInput').value
+  }));
+  assert(edit43.hidden === false && edit43.visible === true && edit43.value === '', `修改 Key 后输入框状态不正确：${JSON.stringify(edit43)}`);
+
+  await page.click('#aiSettingsSave');
+  await waitToast(page, 'AI 配置已保存');
+  const after43 = await page.evaluate(() => ({
+    hidden: document.querySelector('#aiKeyField').classList.contains('hidden'),
+    value: document.querySelector('#aiKeyInput').value,
+    mask: document.querySelector('#aiKeyMask').textContent.trim()
+  }));
+  assert(after43.hidden === true && after43.value === '' && after43.mask === `已保存（${expectedKeyMask}）`, `留空保存后 Key 展示不正确：${JSON.stringify(after43)}`);
+  const ai43 = await readAi(page);
+  assert(ai43.keyMask === expectedKeyMask && ai43.configured === true, `留空保存不应改变已存 Key：${JSON.stringify(ai43)}`);
+  assert(mock.requests.length === 0, '保存配置不得发起模型请求');
+  passCheck(43);
+
+  await page.click('#aiKeyEditButton');
+  await page.fill('#aiKeyInput', NEW_API_KEY);
+  await page.click('#aiSettingsSave');
+  await page.waitForFunction(mask => document.querySelector('#aiKeyMask').textContent.includes(mask), NEW_KEY_MASK, { timeout: 5000 });
+  const after44 = await page.evaluate(() => ({
+    mask: document.querySelector('#aiKeyMask').textContent.trim(),
+    hidden: document.querySelector('#aiKeyField').classList.contains('hidden'),
+    value: document.querySelector('#aiKeyInput').value
+  }));
+  assert(after44.mask === `已保存（${NEW_KEY_MASK}）` && after44.hidden === true && after44.value === '', `保存新 Key 后展示不正确：${JSON.stringify(after44)}`);
+  const ai44 = await readAi(page);
+  assert(ai44.keyMask === NEW_KEY_MASK && ai44.configured === true && ai44.endpoint === mockEndpoint && ai44.model === model, `保存新 Key 后配置不正确：${JSON.stringify(ai44)}`);
+  assert(mock.requests.length === 0, '保存新 Key 不得发起模型请求');
+
+  await page.click('.nav-item[data-page="assistant"]');
+  await waitAssistantConfig(page, 'ready');
+  const warning44 = await page.evaluate(() => ({
+    config: document.querySelector('#assistantConfigWarning').dataset.config,
+    hidden: document.querySelector('#assistantConfigWarning').classList.contains('hidden')
+  }));
+  assert(warning44.config === 'ready' && warning44.hidden === true, `助手页配置提示未同步：${JSON.stringify(warning44)}`);
+  const ai44Entry = await readAi(page);
+  assert(ai44Entry.configured === true, `助手页读取配置应保持完整：${JSON.stringify(ai44Entry)}`);
+
+  await page.click('.nav-item[data-page="settings"]');
+  const back44 = await page.evaluate(() => ({
+    endpoint: document.querySelector('#aiEndpointInput').value,
+    model: document.querySelector('#aiModelInput').value,
+    mask: document.querySelector('#aiKeyMask').textContent.trim(),
+    hidden: document.querySelector('#aiKeyField').classList.contains('hidden'),
+    value: document.querySelector('#aiKeyInput').value
+  }));
+  assert(back44.endpoint === mockEndpoint && back44.model === model && back44.mask === `已保存（${NEW_KEY_MASK}）` && back44.hidden === true && back44.value === '', `返回设置页后表单值不正确：${JSON.stringify(back44)}`);
+  passCheck(44);
+
+  await page.fill('#aiModelInput', '');
+  await page.click('#aiSettingsSave');
+  await page.waitForFunction(() => document.querySelector('#aiSettingsStatus')?.dataset.aiStatus === 'missing', null, { timeout: 5000 });
+  const missing45 = await page.evaluate(() => ({
+    status: document.querySelector('#aiSettingsStatus').dataset.aiStatus,
+    text: document.querySelector('#aiSettingsStatus').textContent.trim()
+  }));
+  assert(missing45.status === 'missing' && missing45.text === '配置不完整，助手功能不可用', `空模型保存后状态行不正确：${JSON.stringify(missing45)}`);
+  const ai45 = await readAi(page);
+  assert(ai45.configured === false && ai45.endpoint === mockEndpoint && ai45.keyMask === NEW_KEY_MASK, `空模型保存后配置不正确：${JSON.stringify(ai45)}`);
+
+  await page.click('.nav-item[data-page="assistant"]');
+  await waitAssistantConfig(page, 'missing');
+  const warning45 = await page.evaluate(() => ({
+    config: document.querySelector('#assistantConfigWarning').dataset.config,
+    hidden: document.querySelector('#assistantConfigWarning').classList.contains('hidden')
+  }));
+  assert(warning45.config === 'missing' && warning45.hidden === false, `不完整配置应显示助手提示：${JSON.stringify(warning45)}`);
+  const ai45Entry = await readAi(page);
+  assert(ai45Entry.configured === false, `助手页读取配置应仍为不完整：${JSON.stringify(ai45Entry)}`);
+
+  await page.click('.nav-item[data-page="settings"]');
+  await page.fill('#aiModelInput', model);
+  await page.click('#aiSettingsSave');
+  await waitSettingsReady(page);
+  await page.click('.nav-item[data-page="assistant"]');
+  await waitAssistantConfig(page, 'ready');
+  const warning45b = await page.evaluate(() => ({
+    config: document.querySelector('#assistantConfigWarning').dataset.config,
+    hidden: document.querySelector('#assistantConfigWarning').classList.contains('hidden')
+  }));
+  assert(warning45b.config === 'ready' && warning45b.hidden === true, `补全模型后助手提示应隐藏：${JSON.stringify(warning45b)}`);
+  passCheck(45);
+
+  await page.click('.nav-item[data-page="settings"]');
+  await page.fill('#aiEndpointInput', 'ftp://x');
+  const typed46 = await page.evaluate(() => document.querySelector('#aiEndpointInput').value);
+  assert(typed46 === 'ftp://x', `非法地址未填入输入框：${typed46}`);
+  await page.click('#aiSettingsSave');
+  await waitToast(page, 'http/https');
+  const after46 = await page.evaluate(() => ({
+    endpoint: document.querySelector('#aiEndpointInput').value,
+    status: document.querySelector('#aiSettingsStatus').dataset.aiStatus,
+    text: document.querySelector('#aiSettingsStatus').textContent.trim()
+  }));
+  assert(after46.endpoint === 'ftp://x', `保存失败不应重置用户输入：${after46.endpoint}`);
+  assert(after46.status === 'ready' && after46.text === '配置完整，助手页可用', `保存失败不应改变状态行：${JSON.stringify(after46)}`);
+  const ai46 = await readAi(page);
+  assert(ai46.endpoint === mockEndpoint && ai46.model === model && ai46.configured === true, `非法地址不应落库：${JSON.stringify(ai46)}`);
+  assert(mock.requests.length === 0, '保存失败不得发起模型请求');
+  passCheck(46);
+
+  const leak47 = await page.evaluate(keys => {
+    const text = document.querySelector('[data-page-view="settings"]').innerText;
+    const values = [...document.querySelectorAll('input')].map(node => node.value).join('\n');
+    let storage = '';
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      storage += `${key}=${localStorage.getItem(key)}\n`;
+    }
+    return {
+      textOld: text.includes(keys[0]),
+      textNew: text.includes(keys[1]),
+      valueOld: values.includes(keys[0]),
+      valueNew: values.includes(keys[1]),
+      storageOld: storage.includes(keys[0]),
+      storageNew: storage.includes(keys[1]),
+      keyValue: document.querySelector('#aiKeyInput').value,
+      mask: document.querySelector('#aiKeyMask').textContent
+    };
+  }, [apiKey, NEW_API_KEY]);
+  assert(leak47.textOld === false && leak47.textNew === false, '页面明文不应包含完整 Key');
+  assert(leak47.valueOld === false && leak47.valueNew === false, '输入框值不应包含完整 Key');
+  assert(leak47.storageOld === false && leak47.storageNew === false, 'localStorage 不应写入完整 Key');
+  assert(leak47.keyValue === '', `Key 输入框应保持清空：${leak47.keyValue}`);
+  assert(leak47.mask.includes(NEW_KEY_MASK) === true, `界面应只展示掩码：${leak47.mask}`);
+  passCheck(47);
+}
+
 (async () => {
   fs.rmSync(dataDir, { recursive: true, force: true });
   fs.mkdirSync(outputDir, { recursive: true });
@@ -1668,6 +1858,11 @@ async function runStageF(electronApp, mock, pageErrors) {
     await stopApp(electronApp);
     electronApp = null;
 
+    electronApp = await launchApp();
+    await runStageG(electronApp, mock, pageErrors);
+    await stopApp(electronApp);
+    electronApp = null;
+
     assert(pageErrors.length === 0, `页面异常应为空，实际 ${JSON.stringify(pageErrors)}`);
     passCheck(24);
 
@@ -1675,7 +1870,7 @@ async function runStageF(electronApp, mock, pageErrors) {
       .filter(key => passed.has(key))
       .sort((a, b) => Number(a) - Number(b))
       .map(key => `${key}. ${CHECK_TITLES[key]}`);
-    assert(checks.length === 41, `断言数量应为 41，实际 ${checks.length}`);
+    assert(checks.length === 47, `断言数量应为 47，实际 ${checks.length}`);
     console.log(JSON.stringify({ passed: true, checks }));
   } finally {
     if (electronApp) await stopApp(electronApp);

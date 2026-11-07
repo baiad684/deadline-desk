@@ -2103,6 +2103,41 @@ async function handleItemAction(button) {
   }
 }
 
+function renderAiSettings() {
+  $('#aiEndpointInput').value = state.ai.endpoint || '';
+  $('#aiModelInput').value = state.ai.model || '';
+  $('#aiKeyMask').textContent = state.ai.keyMask ? `已保存（${state.ai.keyMask}）` : '未设置';
+  $('#aiKeyField').classList.toggle('hidden', !state.ai.editingKey);
+  $('#aiKeyInput').value = '';
+  const ready = Boolean(state.ai.configured);
+  const status = $('#aiSettingsStatus');
+  status.dataset.aiStatus = ready ? 'ready' : 'missing';
+  status.textContent = ready ? '配置完整，助手页可用' : '配置不完整，助手功能不可用';
+}
+
+async function saveAiSettings() {
+  const endpoint = $('#aiEndpointInput').value.trim();
+  const model = $('#aiModelInput').value.trim();
+  const apiKey = state.ai.editingKey ? $('#aiKeyInput').value.trim() : '';
+  const payload = { endpoint, model };
+  if (apiKey) payload.apiKey = apiKey;
+  let result;
+  try {
+    result = await api.settings.saveAi(payload);
+  } catch {
+    showToast('保存失败，请重试', true);
+    return;
+  }
+  if (!result || !result.ok) {
+    showToast((result && result.message) || '保存失败，请重试', true);
+    return;
+  }
+  state.ai = { ...result.ai, editingKey: false };
+  renderAiSettings();
+  renderAssistantConfigWarning();
+  showToast('AI 配置已保存');
+}
+
 async function initializeSettings() {
   const settings = await execute(() => api.settings.get());
   if (!settings) return;
@@ -2114,6 +2149,7 @@ async function initializeSettings() {
   state.ai = settings.ai
     ? { ...settings.ai, editingKey: false }
     : { configured: false, endpoint: '', model: '', keyMask: '', editingKey: false };
+  renderAiSettings();
   if (state.currentPage === 'assistant') renderAssistantConfigWarning();
 }
 
@@ -2252,6 +2288,13 @@ function bindEvents() {
     const result = await execute(() => api.settings.setWidget(event.target.checked));
     if (result !== null) showToast(event.target.checked ? '桌面小组件已显示' : '桌面小组件已隐藏');
   });
+  $('#aiKeyEditButton').addEventListener('click', () => {
+    if (state.ai.editingKey === true) return;
+    state.ai.editingKey = true;
+    renderAiSettings();
+    $('#aiKeyInput').focus();
+  });
+  $('#aiSettingsSave').addEventListener('click', async () => { await saveAiSettings(); });
   $('#backupButton').addEventListener('click', async () => {
     const path = await execute(() => api.data.backup());
     if (path) showToast(`备份已保存：${path}`);

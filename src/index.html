@@ -265,6 +265,21 @@
               <div class="setting-row"><div><strong>显示桌面小组件</strong><p>在桌面显示一个置顶小卡片，展示未来 7 天内到期的未完成事项，数据实时同步。</p></div><label class="switch"><input type="checkbox" id="widgetToggle"><span></span></label></div>
               <div class="setting-note"><span data-icon="info"></span><p>小组件独立于主窗口；按住卡片空白处可拖动，位置会自动记住。点击截止事项可打开对应事项详情。</p></div>
             </section>
+            <section class="settings-group panel" id="aiSettingsGroup">
+              <header class="panel-header"><div><h2>AI 配置</h2><span>助手调用的在线模型</span></div></header>
+              <div class="ai-settings-form">
+                <label class="field full"><span>接口地址</span><input id="aiEndpointInput" type="url" placeholder="https://api.example.com/v1/chat/completions" autocomplete="off" spellcheck="false"></label>
+                <label class="field full"><span>模型名</span><input id="aiModelInput" type="text" maxlength="200" placeholder="例如：gpt-4o-mini" autocomplete="off" spellcheck="false"></label>
+                <div class="ai-key-row">
+                  <div class="ai-key-display"><span>API Key</span><strong id="aiKeyMask">未设置</strong></div>
+                  <button type="button" class="secondary-button" id="aiKeyEditButton">修改</button>
+                </div>
+                <label class="field full hidden" id="aiKeyField"><span>新的 API Key</span><input id="aiKeyInput" type="password" maxlength="4096" autocomplete="new-password" placeholder="输入新的 API Key；留空保存则保持现有 Key" aria-label="新的 API Key"></label>
+              </div>
+              <div class="ai-settings-status" id="aiSettingsStatus" data-ai-status="missing">配置不完整，助手功能不可用</div>
+              <div class="setting-note"><span data-icon="info"></span><p>使用助手时，当前输入、当前本地日期/星期/时刻与事项摘要（编号、标题、类型、截止时间、状态）会发送到你配置的第三方接口；事项说明、附件文件、日记与打卡数据不会发送。API Key 只保存在本机数据库，界面只显示掩码。</p></div>
+              <div class="ai-settings-actions"><button type="button" class="primary-button" id="aiSettingsSave"><span data-icon="check"></span>保存 AI 配置</button></div>
+            </section>
             <section class="settings-group panel">
               <header class="panel-header"><div><h2>备份与恢复</h2><span>数据库和全部附件</span></div></header>
               <div class="setting-action"><div><strong>导出备份</strong><p>生成带日期时间的新备份文件，不覆盖以前的备份。</p></div><button class="secondary-button" id="backupButton"><span data-icon="download"></span>导出备份</button></div>

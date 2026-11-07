@@ -3413,4 +3413,96 @@ describe('助手后端单元测试（detail_v1）', () => {
       assert.ok(!assistantBlock.includes('style="'));
     });
   });
+
+  // ============ F20 设置页 AI 配置 DOM 契约（v4） ============
+
+  describe('F20 设置页 AI 配置 DOM 契约', () => {
+    const html = fs.readFileSync(path.join(projectDir, 'src/index.html'), 'utf8');
+    const settingsStart = html.indexOf('<section class="page" data-page-view="settings">');
+    assert.ok(settingsStart > 0, '缺少设置页容器');
+    const settingsPageEnd = html.indexOf('</main>', settingsStart);
+    assert.ok(settingsPageEnd > settingsStart, '缺少设置页结束位置');
+    const settingsBlock = html.slice(settingsStart, settingsPageEnd);
+    const aiGroupStart = settingsBlock.lastIndexOf('<section', settingsBlock.indexOf('id="aiSettingsGroup"'));
+    const backupHeading = settingsBlock.indexOf('<h2>备份与恢复</h2>');
+    const aiGroupEnd = settingsBlock.lastIndexOf('<section', backupHeading);
+    assert.ok(aiGroupStart > 0 && aiGroupEnd > aiGroupStart, 'AI 配置分组切片失败');
+    const aiGroup = settingsBlock.slice(aiGroupStart, aiGroupEnd);
+    const tagOfIn = (block, id) => {
+      const match = block.match(new RegExp(`<[a-z]+[^>]*\\bid="${id}"[^>]*>`));
+      assert.ok(match, `设置页缺少 #${id}`);
+      return match[0];
+    };
+
+    test('F20.1 分组顺序与字段：AI 配置位于桌面小组件与备份之间，字段类型正确', () => {
+      const headings = [...settingsBlock.matchAll(/<h2>([\s\S]*?)<\/h2>/g)].map(match => match[1].trim());
+      assert.deepEqual(headings, ['提醒', '桌面小组件', 'AI 配置', '备份与恢复', '本地数据']);
+
+      const groupTag = tagOfIn(aiGroup, 'aiSettingsGroup');
+      assert.ok(groupTag.startsWith('<section'));
+      assert.ok(aiGroup.includes('<span>助手调用的在线模型</span>'), '缺少分组副标题');
+
+      for (const label of ['接口地址', '模型名', 'API Key', '新的 API Key']) {
+        assert.ok(aiGroup.includes(`<span>${label}</span>`), `缺少字段标签「${label}」`);
+      }
+
+      const endpointTag = tagOfIn(aiGroup, 'aiEndpointInput');
+      assert.ok(endpointTag.includes('type="url"'));
+      assert.ok(endpointTag.includes('placeholder="https://api.example.com/v1/chat/completions"'));
+      assert.ok(!endpointTag.includes('maxlength'), '接口地址输入框不应设置 maxlength');
+
+      const modelTag = tagOfIn(aiGroup, 'aiModelInput');
+      assert.ok(modelTag.includes('type="text"'));
+      assert.ok(modelTag.includes('maxlength="200"'));
+      assert.ok(modelTag.includes('placeholder="例如：gpt-4o-mini"'));
+
+      const saveContent = aiGroup.match(/<button[^>]*\bid="aiSettingsSave"[^>]*>([\s\S]*?)<\/button>/)[1];
+      assert.ok(saveContent.includes('data-icon="check"'));
+      assert.ok(saveContent.includes('保存 AI 配置'));
+    });
+
+    test('F20.2 默认态与 Key 输入：初始未设置、Key 输入框隐藏且不含明文', () => {
+      const uniqueIds = [
+        'aiSettingsGroup', 'aiEndpointInput', 'aiModelInput', 'aiKeyMask', 'aiKeyEditButton',
+        'aiKeyField', 'aiKeyInput', 'aiSettingsStatus', 'aiSettingsSave'
+      ];
+      for (const id of uniqueIds) {
+        const occurrences = aiGroup.match(new RegExp(`id="${id}"`, 'g')) || [];
+        assert.equal(occurrences.length, 1, `#${id} 应恰好出现一次`);
+      }
+      assert.ok(!aiGroup.includes('<form'), 'AI 配置分组不应包在 <form> 内');
+
+      assert.ok(aiGroup.includes('<strong id="aiKeyMask">未设置</strong>'));
+
+      const keyFieldTag = tagOfIn(aiGroup, 'aiKeyField');
+      assert.ok(keyFieldTag.includes('class="field full hidden"'));
+
+      const keyInputTag = tagOfIn(aiGroup, 'aiKeyInput');
+      assert.ok(keyInputTag.includes('type="password"'));
+      assert.ok(keyInputTag.includes('maxlength="4096"'));
+      assert.ok(keyInputTag.includes('autocomplete="new-password"'));
+      assert.ok(!keyInputTag.includes('value'), 'Key 输入框不应带 value 属性');
+
+      const statusTag = tagOfIn(aiGroup, 'aiSettingsStatus');
+      assert.ok(statusTag.includes('data-ai-status="missing"'));
+      const statusContent = aiGroup.match(/<div[^>]*\bid="aiSettingsStatus"[^>]*>([\s\S]*?)<\/div>/)[1];
+      assert.equal(statusContent.trim(), '配置不完整，助手功能不可用');
+    });
+
+    test('F20.3 隐私说明：列出发送与不发送的字段清单', () => {
+      const privacy = aiGroup.match(/<div class="setting-note">[\s\S]*?<p>([\s\S]*?)<\/p>/)[1];
+      for (const token of ['会发送到你配置的第三方接口', '不会发送', '编号、标题、类型、截止时间、状态', '事项说明、附件文件、日记', '只显示掩码']) {
+        assert.ok(privacy.includes(token), `隐私说明缺少「${token}」`);
+      }
+      assert.ok(!privacy.includes('不随备份打包'), 'R5 之前隐私说明不应提备份排除');
+    });
+
+    test('F20.4 静态安全：不含内联事件处理器、内联 style，修改按钮为 type="button"', () => {
+      assert.ok(!/\son(?:click|input|change|submit|load|error|focus|blur|keydown|keyup)\s*=/i.test(aiGroup));
+      assert.ok(!aiGroup.includes('style="'));
+      const editTag = tagOfIn(aiGroup, 'aiKeyEditButton');
+      assert.ok(editTag.startsWith('<button'));
+      assert.ok(editTag.includes('type="button"'));
+    });
+  });
 });

@@ -293,6 +293,16 @@ kbd { padding: 2px 5px; border: 1px solid var(--line-300); border-bottom-width: 
 .danger-zone { background: #fdf7f5; }
 .danger-zone strong { color: var(--danger); }
 
+.ai-settings-form { display: grid; gap: 14px; padding: 16px 17px 0; }
+.ai-key-row { display: flex; align-items: flex-end; gap: 10px; }
+.ai-key-display { flex: 1; min-width: 0; }
+.ai-key-display span { display: block; margin-bottom: 6px; color: var(--ink-700); font-size: 12px; font-weight: 600; }
+.ai-key-display strong { display: block; min-width: 0; font-size: 13px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-settings-status { margin: 12px 17px 0; padding: 9px 11px; border-radius: var(--radius-md); font-size: 12px; line-height: 1.5; }
+.ai-settings-status[data-ai-status="ready"] { color: var(--success); background: var(--success-soft); }
+.ai-settings-status[data-ai-status="missing"] { color: var(--warning); background: var(--warning-soft); }
+.ai-settings-actions { display: flex; justify-content: flex-end; padding: 12px 17px 16px; }
+
 .diary-layout { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 16px; align-items: start; }
 .diary-calendar-panel, .diary-editor-panel { overflow: hidden; }
 .diary-month-actions { display: flex; align-items: center; gap: 6px; }
