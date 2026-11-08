@@ -24,7 +24,11 @@ let notificationTimer;
 
 const APP_NAME = '截止线';
 
-const AI_SETTING_KEYS = { endpoint: 'ai_endpoint', model: 'ai_model', apiKey: 'ai_api_key' };
+const AI_SETTING_KEYS = { endpoint: 'ai_endpoint', model: 'ai_model', apiKey: 'ai_api_key', protocol: 'ai_protocol' };
+const AI_ALLOWED_PROTOCOLS = Object.freeze(['openai', 'anthropic']);
+const AI_DEFAULT_PROTOCOL = 'openai';
+const AI_ANTHROPIC_VERSION = '2023-06-01';
+const AI_ANTHROPIC_MAX_TOKENS = 4096;
 const AI_INPUT_MAX_LENGTH = 3000;
 const AI_SUMMARY_LIMIT = 100;
 const AI_MODEL_MAX_LENGTH = 200;
@@ -969,8 +973,13 @@ async function restoreBackupArchive(source) {
   }
 }
 
+function normalizeAiProtocol(value) {
+  return value === 'anthropic' ? 'anthropic' : AI_DEFAULT_PROTOCOL;
+}
+
 function readAiConfig() {
   return {
+    protocol: normalizeAiProtocol(getSetting(AI_SETTING_KEYS.protocol)),
     endpoint: (getSetting(AI_SETTING_KEYS.endpoint) || '').trim(),
     model: (getSetting(AI_SETTING_KEYS.model) || '').trim(),
     apiKey: (getSetting(AI_SETTING_KEYS.apiKey) || '').trim()
@@ -998,6 +1007,7 @@ function buildAiSettingsView() {
   const config = readAiConfig();
   return {
     configured: config.endpoint !== '' && config.model !== '' && config.apiKey !== '' && isValidAiEndpoint(config.endpoint),
+    protocol: config.protocol,
     endpoint: config.endpoint,
     model: config.model,
     keyMask: maskApiKey(config.apiKey)
@@ -1081,15 +1091,35 @@ async function callChatCompletion(options) {
   const controller = new AbortController();
   const abortTimer = setTimeout(() => controller.abort(), timeoutMs);
   let guardTimer;
+  let headers;
+  let body;
+  if (normalizeAiProtocol(options.protocol) === 'anthropic') {
+    const systemMessages = options.messages.filter(item => item.role === 'system' && typeof item.content === 'string');
+    headers = {
+      'content-type': 'application/json',
+      'x-api-key': options.apiKey,
+      'anthropic-version': AI_ANTHROPIC_VERSION
+    };
+    body = {
+      model: options.model,
+      max_tokens: AI_ANTHROPIC_MAX_TOKENS,
+      temperature: 0,
+      messages: options.messages.filter(item => item.role !== 'system').map(item => ({ role: item.role, content: item.content }))
+    };
+    if (systemMessages.length > 0) body.system = systemMessages.map(item => item.content).join('\n\n');
+  } else {
+    headers = {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      Authorization: `Bearer ${options.apiKey}`
+    };
+    body = { model: options.model, temperature: 0, messages: options.messages };
+  }
   const requestPromise = (async () => {
     const response = await net.fetch(options.endpoint, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-        Authorization: `Bearer ${options.apiKey}`
-      },
-      body: JSON.stringify({ model: options.model, temperature: 0, messages: options.messages }),
+      headers,
+      body: JSON.stringify(body),
       signal: controller.signal
     });
     const text = await response.text();
@@ -1112,13 +1142,28 @@ async function callChatCompletion(options) {
   }
 }
 
-function readChatText(chat) {
+function readChatText(chat, protocol = 'openai') {
   if (!chat.ok) throw createHttpFailure(chat.status);
   let payload;
   try {
     payload = JSON.parse(chat.text);
   } catch {
     throw new AssistantFailure('invalid_response', AI_ERROR_TABLE.invalid_response.message, AI_ERROR_TABLE.invalid_response.retryable);
+  }
+  if (normalizeAiProtocol(protocol) === 'anthropic') {
+    const content = payload && typeof payload === 'object' ? payload.content : null;
+    if (!Array.isArray(content)) {
+      throw new AssistantFailure('invalid_response', AI_ERROR_TABLE.invalid_response.message, AI_ERROR_TABLE.invalid_response.retryable);
+    }
+    const anthropicText = content
+      .filter(part => part && typeof part === 'object' && part.type === 'text' && typeof part.text === 'string')
+      .map(part => part.text)
+      .join('');
+    if (payload.stop_reason === 'max_tokens') {
+      throw new AssistantFailure('invalid_response', AI_ERROR_TABLE.invalid_response.message, AI_ERROR_TABLE.invalid_response.retryable);
+    }
+    if (!anthropicText.trim()) throw new AssistantFailure('empty_response', AI_ERROR_TABLE.empty_response.message, AI_ERROR_TABLE.empty_response.retryable);
+    return anthropicText;
   }
   const choices = payload && typeof payload === 'object' ? payload.choices : null;
   if (!Array.isArray(choices) || choices.length === 0) {
@@ -1185,8 +1230,8 @@ function extractJsonObject(text) {
   return null;
 }
 
-function readAssistantPayload(chat) {
-  const parsed = extractJsonObject(readChatText(chat));
+function readAssistantPayload(chat, protocol = 'openai') {
+  const parsed = extractJsonObject(readChatText(chat, protocol));
   if (!parsed) throw new AssistantFailure('invalid_response', AI_ERROR_TABLE.invalid_response.message, AI_ERROR_TABLE.invalid_response.retryable);
   return parsed;
 }
@@ -1894,13 +1939,14 @@ async function handleAssistantQuery(options) {
       endpoint: config.endpoint,
       apiKey: config.apiKey,
       model: config.model,
+      protocol: config.protocol,
       messages: [
         { role: 'system', content: buildQuerySystemPrompt() },
         { role: 'user', content: buildQueryUserMessage(meta, input) }
       ],
       timeoutMs: resolveAiTimeoutMs()
     });
-    answer = readChatText(chat);
+    answer = readChatText(chat, config.protocol);
   } catch {
     answer = buildQueryFallback(meta, filters.shape);
     fallback = true;
@@ -1933,13 +1979,14 @@ function registerAssistantHandlers() {
         endpoint: config.endpoint,
         apiKey: config.apiKey,
         model: config.model,
+        protocol: config.protocol,
         messages: [
           { role: 'system', content: buildAssistantSystemPrompt() },
           { role: 'user', content: buildAssistantUserMessage(now, summary.items, text) }
         ],
         timeoutMs: resolveAiTimeoutMs()
       });
-      const payload = readAssistantPayload(chat);
+      const payload = readAssistantPayload(chat, config.protocol);
       const planOptions = {
         payload,
         summaryItems: summary.items,
@@ -2019,9 +2066,14 @@ function registerDataHandlers() {
       if (endpoint && !isValidAiEndpoint(endpoint)) return { ok: false, message: '接口地址格式不正确，请填写完整的 http/https 地址' };
       if (model.length > AI_MODEL_MAX_LENGTH) return { ok: false, message: '模型名内容过长' };
       if (apiKey.length > AI_KEY_MAX_LENGTH) return { ok: false, message: 'API Key 内容过长' };
+      let protocol;
+      if (payload.protocol === undefined) protocol = normalizeAiProtocol(getSetting(AI_SETTING_KEYS.protocol));
+      else if (typeof payload.protocol === 'string' && AI_ALLOWED_PROTOCOLS.includes(payload.protocol)) protocol = payload.protocol;
+      else return { ok: false, message: '接口协议不正确' };
       setSetting(AI_SETTING_KEYS.endpoint, endpoint);
       setSetting(AI_SETTING_KEYS.model, model);
       if (apiKey) setSetting(AI_SETTING_KEYS.apiKey, apiKey);
+      setSetting(AI_SETTING_KEYS.protocol, protocol);
       return { ok: true, ai: buildAiSettingsView() };
     } catch {
       return { ok: false, message: '保存失败，请重试' };

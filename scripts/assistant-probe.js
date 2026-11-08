@@ -22,6 +22,15 @@ const STAGE_H_BACKUP = path.join(outputDir, 'stage-h-backup.zip');
 const STAGE_H_RESTORE = path.join(outputDir, 'stage-h-restore.zip');
 const STAGE_H_EXTRACT = path.join(outputDir, 'stage-h-extract');
 const STAGE_H_DB = path.join(STAGE_H_EXTRACT, 'deadline-desk.db');
+const ANTHROPIC_VERSION = '2023-06-01';
+const ANTHROPIC_MAX_TOKENS = 4096;
+const ANTHROPIC_KEY = 'sk-ant-probe-key-123456';
+const ANTHROPIC_KEY_MASK = 'sk-a••••3456';
+const STAGE_I_BACKUP = path.join(outputDir, 'stage-i-backup.zip');
+const STAGE_I_RESTORE = path.join(outputDir, 'stage-i-restore.zip');
+const STAGE_I_RESTORE_DB = path.join(outputDir, 'stage-i-restore.db');
+const STAGE_I_EXTRACT = path.join(outputDir, 'stage-i-extract');
+const STAGE_I_DB = path.join(STAGE_I_EXTRACT, 'deadline-desk.db');
 
 let mockEndpoint = '';
 
@@ -79,7 +88,14 @@ const CHECK_TITLES = {
   51: '重启后助手会话为空、输入不残留',
   52: '多意图与越界意图：只读提示、无执行入口、零写入',
   53: '疑似重复强制勾选与过期候选写入',
-  54: '批量删除：目标已不存在时其余行继续执行'
+  54: '批量删除：目标已不存在时其余行继续执行',
+  55: '设置页：协议下拉结构与默认值',
+  56: '设置页：切换协议不清空字段并保存协议',
+  57: 'Anthropic：新增调用请求头与请求体',
+  58: 'Anthropic：查询两次调用与成功响应解析',
+  59: 'Anthropic：错误映射、超时与零写入',
+  60: '切回 OpenAI：请求与解析恢复既有行为',
+  61: '备份与恢复：协议随库保留、Key 不导出'
 };
 
 const passed = new Set();
@@ -156,39 +172,69 @@ function sendJson(res, status, payload, delayMs = 0) {
   else write();
 }
 
+function detectProtocol(headers) {
+  return headers['anthropic-version'] ? 'anthropic' : 'openai';
+}
+
+function readUserContent(body) {
+  if (!Array.isArray(body.messages)) return undefined;
+  const last = body.messages.filter(item => item && item.role === 'user' && typeof item.content === 'string').pop();
+  return last ? last.content : undefined;
+}
+
+function modelEnvelope(protocol, content, options = {}) {
+  if (protocol === 'anthropic') {
+    return {
+      id: 'mock',
+      type: 'message',
+      role: 'assistant',
+      model,
+      content: Array.isArray(content) ? content : [{ type: 'text', text: content }],
+      stop_reason: options.stopReason || 'end_turn'
+    };
+  }
+  return chatCompletion(content, options.finishReason || 'stop');
+}
+
+function respondModel(res, protocol, status, content, options = {}) {
+  sendJson(res, status, modelEnvelope(protocol, content, options), options.delayMs || 0);
+}
+
 function createMockServer() {
   return new Promise((resolve, reject) => {
     const requests = [];
     const state = { queryScenario: null };
-    const respondQuery = res => {
+    const respondQuery = (res, protocol) => {
       if (state.queryScenario === 'this_month') {
-        sendJson(res, 200, chatCompletion('按截止时间在本月内：已完成 1 个。'));
+        respondModel(res, protocol, 200, '按截止时间在本月内：已完成 1 个。');
         return;
       }
       sendJson(res, 500, { error: { message: 'secret-body' } });
     };
-    const respondScenario = (res, key) => {
+    const respondScenario = (res, key, protocol) => {
       switch (key) {
         case 'MOCK_CREATE':
-          return sendJson(res, 200, chatCompletion('{"intent":"create","create":{"candidates":[{"title":"数据库课设","kind":"assignment","deadline":"2026-11-13 23:59","status":"not_started","description":"","workType":"personal"},{"title":"校辩论赛报名","kind":"activity","deadline":"2026-11-10 23:59","status":"not_completed","description":"","workType":null}]},"message":"已识别到 2 条候选"}'));
+          return respondModel(res, protocol, 200, '{"intent":"create","create":{"candidates":[{"title":"数据库课设","kind":"assignment","deadline":"2026-11-13 23:59","status":"not_started","description":"","workType":"personal"},{"title":"校辩论赛报名","kind":"activity","deadline":"2026-11-10 23:59","status":"not_completed","description":"","workType":null}]},"message":"已识别到 2 条候选"}');
         case 'MOCK_FENCE':
-          return sendJson(res, 200, chatCompletion('```json\n{"intent":"create","message":"ok"}\n```'));
+          return respondModel(res, protocol, 200, '```json\n{"intent":"create","message":"ok"}\n```');
         case 'MOCK_ARRAY':
-          return sendJson(res, 200, chatCompletion([{ type: 'text', text: '{"intent":"create","message":"ok"}' }]));
+          return respondModel(res, protocol, 200, [{ type: 'text', text: '{"intent":"create","message":"ok"}' }]);
         case 'MOCK_MULTI':
-          return sendJson(res, 200, chatCompletion('{"intent":"multiple","detectedIntents":["create","delete"],"message":"mixed"}'));
+          return respondModel(res, protocol, 200, '{"intent":"multiple","detectedIntents":["create","delete"],"message":"mixed"}');
         case 'MOCK_MULTI_EMPTY':
-          return sendJson(res, 200, chatCompletion('{"intent":"multiple","message":"mixed"}'));
+          return respondModel(res, protocol, 200, '{"intent":"multiple","message":"mixed"}');
         case 'MOCK_UNKNOWN':
-          return sendJson(res, 200, chatCompletion('{"intent":"whatever"}'));
+          return respondModel(res, protocol, 200, '{"intent":"whatever"}');
         case 'MOCK_UNSUPPORTED':
-          return sendJson(res, 200, chatCompletion('{"intent":"unsupported","message":"不支持生成周报。"}'));
+          return respondModel(res, protocol, 200, '{"intent":"unsupported","message":"不支持生成周报。"}');
         case 'MOCK_EMPTY':
-          return sendJson(res, 200, chatCompletion(''));
+          return respondModel(res, protocol, 200, '');
         case 'MOCK_NOT_JSON':
-          return sendJson(res, 200, chatCompletion('抱歉，我不能…'));
+          return respondModel(res, protocol, 200, '抱歉，我不能…');
         case 'MOCK_LENGTH':
-          return sendJson(res, 200, chatCompletion('{"intent":"clarify","message":"length"}', 'length'));
+          return respondModel(res, protocol, 200, '{"intent":"clarify","message":"length"}', { finishReason: 'length', stopReason: 'max_tokens' });
+        case 'MOCK_ANTHROPIC_MAX_TOKENS':
+          return respondModel(res, protocol, 200, '{"intent":"clarify","message":"cut"}', { stopReason: 'max_tokens' });
         case 'MOCK_NO_CHOICES':
           return sendJson(res, 200, { choices: [] });
         case 'MOCK_401':
@@ -198,17 +244,17 @@ function createMockServer() {
         case 'MOCK_500':
           return sendJson(res, 500, { error: { message: 'secret-body' } });
         case 'MOCK_SLOW':
-          return sendJson(res, 200, chatCompletion('{"intent":"clarify","message":"slow"}'), 1500);
+          return respondModel(res, protocol, 200, '{"intent":"clarify","message":"slow"}', { delayMs: 1500 });
         case 'MOCK_QUERY_THIS_MONTH':
           state.queryScenario = 'this_month';
-          return sendJson(res, 200, chatCompletion('{"intent":"query","query":{"range":{"type":"this_month"},"kind":"all","status":"completed","shape":"count"}}'));
+          return respondModel(res, protocol, 200, '{"intent":"query","query":{"range":{"type":"this_month"},"kind":"all","status":"completed","shape":"count"}}');
         case 'MOCK_QUERY_FALLBACK':
           state.queryScenario = 'fallback';
-          return sendJson(res, 200, chatCompletion('{"intent":"query","query":{"range":{"type":"last_month"},"status":"completed"}}'));
+          return respondModel(res, protocol, 200, '{"intent":"query","query":{"range":{"type":"last_month"},"status":"completed"}}');
         case 'MOCK_QUERY_NO_RANGE':
-          return sendJson(res, 200, chatCompletion('{"intent":"query","query":{}}'));
+          return respondModel(res, protocol, 200, '{"intent":"query","query":{}}');
         case 'MOCK_PLAN_CREATE':
-          return sendJson(res, 200, chatCompletion(JSON.stringify({
+          return respondModel(res, protocol, 200, JSON.stringify({
             intent: 'create',
             message: '已整理出候选',
             create: {
@@ -221,9 +267,9 @@ function createMockServer() {
               ],
               ignored: [{ text: '随手一提', reason: '没有明确标题' }]
             }
-          })));
+          }));
         case 'MOCK_PLAN_UPDATE':
-          return sendJson(res, 200, chatCompletion(JSON.stringify({
+          return respondModel(res, protocol, 200, JSON.stringify({
             intent: 'update',
             message: '已找到目标',
             update: {
@@ -236,20 +282,20 @@ function createMockServer() {
                 description: '新说明'
               }
             }
-          })));
+          }));
         case 'MOCK_PLAN_UPDATE_INVALID':
-          return sendJson(res, 200, chatCompletion(JSON.stringify({
+          return respondModel(res, protocol, 200, JSON.stringify({
             intent: 'update',
             update: { targetIds: [2], changes: { status: 'in_progress', deadline: '2026-02-31 10:00' } }
-          })));
+          }));
         case 'MOCK_PLAN_DELETE':
-          return sendJson(res, 200, chatCompletion(JSON.stringify({ intent: 'delete', delete: { targetIds: [3, 2] } })));
+          return respondModel(res, protocol, 200, JSON.stringify({ intent: 'delete', delete: { targetIds: [3, 2] } }));
         case 'MOCK_PLAN_CLEANUP':
-          return sendJson(res, 200, chatCompletion(JSON.stringify({ intent: 'cleanup', cleanup: { range: { type: 'last_month' } } })));
+          return respondModel(res, protocol, 200, JSON.stringify({ intent: 'cleanup', cleanup: { range: { type: 'last_month' } } }));
         case 'MOCK_PLAN_CLEANUP_EMPTY':
-          return sendJson(res, 200, chatCompletion(JSON.stringify({ intent: 'cleanup', cleanup: { range: { type: 'next_month' } } })));
+          return respondModel(res, protocol, 200, JSON.stringify({ intent: 'cleanup', cleanup: { range: { type: 'next_month' } } }));
         case 'MOCK_UI_CREATE':
-          return sendJson(res, 200, chatCompletion(JSON.stringify({
+          return respondModel(res, protocol, 200, JSON.stringify({
             intent: 'create',
             message: '已整理出候选',
             create: {
@@ -261,9 +307,9 @@ function createMockServer() {
               ],
               ignored: [{ text: '随手一提', reason: '没有明确标题' }]
             }
-          })));
+          }));
         case 'MOCK_UI_CREATE_MISSING':
-          return sendJson(res, 200, chatCompletion(JSON.stringify({
+          return respondModel(res, protocol, 200, JSON.stringify({
             intent: 'create',
             message: '已整理出候选',
             create: {
@@ -274,7 +320,7 @@ function createMockServer() {
               ],
               ignored: []
             }
-          })));
+          }));
         case 'MOCK_UI_CREATE_BULK': {
           const candidates = [];
           for (let index = 0; index < 60; index += 1) {
@@ -286,10 +332,10 @@ function createMockServer() {
               workType: 'personal'
             });
           }
-          return sendJson(res, 200, chatCompletion(JSON.stringify({ intent: 'create', create: { candidates, ignored: [] } })));
+          return respondModel(res, protocol, 200, JSON.stringify({ intent: 'create', create: { candidates, ignored: [] } }));
         }
         case 'MOCK_UI_XSS':
-          return sendJson(res, 200, chatCompletion(JSON.stringify({
+          return respondModel(res, protocol, 200, JSON.stringify({
             intent: 'create',
             create: {
               candidates: [{
@@ -302,51 +348,51 @@ function createMockServer() {
               }],
               ignored: []
             }
-          })));
+          }));
         case 'MOCK_UI_UPDATE':
-          return sendJson(res, 200, chatCompletion(JSON.stringify({
+          return respondModel(res, protocol, 200, JSON.stringify({
             intent: 'update',
             message: '已找到目标',
             update: { targetIds: [2], changes: { deadline: `${localDate(6)} 23:59` } }
-          })));
+          }));
         case 'MOCK_UI_UPDATE_MULTI':
-          return sendJson(res, 200, chatCompletion(JSON.stringify({
+          return respondModel(res, protocol, 200, JSON.stringify({
             intent: 'update',
             message: '匹配到多个事项',
             update: { targetIds: [3, 4], changes: { status: 'completed' } }
-          })));
+          }));
         case 'MOCK_UI_UPDATE_STATUS_INVALID':
-          return sendJson(res, 200, chatCompletion(JSON.stringify({
+          return respondModel(res, protocol, 200, JSON.stringify({
             intent: 'update',
             update: { targetIds: [2], changes: { status: 'in_progress' } }
-          })));
+          }));
         case 'MOCK_UI_UPDATE_TITLE':
-          return sendJson(res, 200, chatCompletion(JSON.stringify({
+          return respondModel(res, protocol, 200, JSON.stringify({
             intent: 'update',
             update: { targetIds: [1], changes: { title: '数据库课程设计（新）' } }
-          })));
+          }));
         case 'MOCK_UI_DELETE':
-          return sendJson(res, 200, chatCompletion(JSON.stringify({
+          return respondModel(res, protocol, 200, JSON.stringify({
             intent: 'delete',
             delete: { targetIds: [2] }
-          })));
+          }));
         case 'MOCK_UI_DELETE_CREATED':
-          return sendJson(res, 200, chatCompletion(JSON.stringify({
+          return respondModel(res, protocol, 200, JSON.stringify({
             intent: 'delete',
             delete: { targetIds: [8] }
-          })));
+          }));
         case 'MOCK_UI_CLEANUP':
-          return sendJson(res, 200, chatCompletion(JSON.stringify({
+          return respondModel(res, protocol, 200, JSON.stringify({
             intent: 'cleanup',
             cleanup: { range: { type: 'last_month' } }
-          })));
+          }));
         case 'MOCK_UI_CLEANUP_EMPTY':
-          return sendJson(res, 200, chatCompletion(JSON.stringify({
+          return respondModel(res, protocol, 200, JSON.stringify({
             intent: 'cleanup',
             cleanup: { range: { type: 'next_month' } }
-          })));
+          }));
         case 'MOCK_UI_DUPLICATE':
-          return sendJson(res, 200, chatCompletion(JSON.stringify({
+          return respondModel(res, protocol, 200, JSON.stringify({
             intent: 'create',
             create: {
               candidates: [
@@ -355,20 +401,20 @@ function createMockServer() {
               ],
               ignored: []
             }
-          })));
+          }));
         case 'MOCK_UI_DELETE_PARTIAL':
-          return sendJson(res, 200, chatCompletion(JSON.stringify({
+          return respondModel(res, protocol, 200, JSON.stringify({
             intent: 'delete',
             delete: { targetIds: [6, 7] }
-          })));
+          }));
         case 'MOCK_UI_DELAYED':
-          return sendJson(res, 200, chatCompletion(JSON.stringify({
+          return respondModel(res, protocol, 200, JSON.stringify({
             intent: 'create',
             create: {
               candidates: [{ title: '助手延迟候选', kind: 'assignment', deadline: `${localDate(4)} 23:59`, status: 'not_started', workType: 'personal' }],
               ignored: []
             }
-          })), 400);
+          }), { delayMs: 400 });
         case 'MOCK_400':
           return sendJson(res, 400, { error: { message: 'secret-body' } });
         case 'MOCK_404':
@@ -376,7 +422,7 @@ function createMockServer() {
         case 'MOCK_418':
           return sendJson(res, 418, { error: { message: 'secret-body' } });
         default:
-          return sendJson(res, 200, chatCompletion('{"intent":"clarify","message":"请补充更多信息"}'));
+          return respondModel(res, protocol, 200, '{"intent":"clarify","message":"请补充更多信息"}');
       }
     };
     const server = http.createServer((req, res) => {
@@ -389,8 +435,9 @@ function createMockServer() {
         } catch {
           body = {};
         }
-        requests.push({ method: req.method, url: `http://${req.headers.host}${req.url}`, headers: req.headers, body });
-        const contentText = body && Array.isArray(body.messages) ? body.messages[1]?.content : undefined;
+        const protocol = detectProtocol(req.headers);
+        requests.push({ method: req.method, url: `http://${req.headers.host}${req.url}`, headers: req.headers, body, protocol });
+        const contentText = readUserContent(body);
         let parsed = null;
         if (typeof contentText === 'string') {
           try {
@@ -400,11 +447,11 @@ function createMockServer() {
           }
         }
         if (parsed && typeof parsed === 'object' && typeof parsed.question === 'string') {
-          respondQuery(res);
+          respondQuery(res, protocol);
           return;
         }
         const input = parsed && typeof parsed === 'object' && typeof parsed.input === 'string' ? parsed.input : '';
-        respondScenario(res, input);
+        respondScenario(res, input, protocol);
       });
     });
     server.on('error', reject);
@@ -531,7 +578,7 @@ async function readDbSettings(file) {
   const SQL = await loadSqlJs();
   const db = new SQL.Database(fs.readFileSync(file));
   try {
-    const result = db.exec("SELECT key, value FROM settings WHERE key IN ('ai_endpoint','ai_model','ai_api_key')");
+    const result = db.exec("SELECT key, value FROM settings WHERE key IN ('ai_endpoint','ai_model','ai_api_key','ai_protocol')");
     if (!result.length) return {};
     return Object.fromEntries(result[0].values.map(row => [row[0], row[1]]));
   } finally {
@@ -553,10 +600,10 @@ function createZipArchive(destination, databaseFile, manifestText) {
   });
 }
 
-async function buildRestoreZip(sourceDbFile) {
+async function buildRestoreZip(sourceDbFile, targetZip = STAGE_H_RESTORE, workingDbFile = path.join(outputDir, 'stage-h-restore.db')) {
   const SQL = await loadSqlJs();
   const db = new SQL.Database(fs.readFileSync(sourceDbFile));
-  const restoreDb = path.join(outputDir, 'stage-h-restore.db');
+  const restoreDb = workingDbFile;
   try {
     db.run("UPDATE settings SET value = ? WHERE key = 'ai_endpoint'", [BACKUP_ENDPOINT]);
     db.run("UPDATE settings SET value = ? WHERE key = 'ai_model'", [BACKUP_MODEL]);
@@ -566,7 +613,7 @@ async function buildRestoreZip(sourceDbFile) {
     db.close();
   }
   await createZipArchive(
-    STAGE_H_RESTORE,
+    targetZip,
     restoreDb,
     JSON.stringify({ app: 'Deadline Desk', version: 1, createdAt: new Date().toISOString() })
   );
@@ -2116,6 +2163,247 @@ async function runStageH2(electronApp, mock, pageErrors) {
   assert(dom50.keyHidden === true, 'Key 输入框应隐藏');
 }
 
+async function runStageI(electronApp, mock, pageErrors) {
+  const page = await openStagePage(electronApp, pageErrors);
+  await page.click('.nav-item[data-page="settings"]');
+  await waitSettingsLoaded(page, BACKUP_ENDPOINT);
+
+  const dom55 = await page.evaluate(() => {
+    const select = document.querySelector('#aiProtocolSelect');
+    const group = document.querySelector('#aiSettingsGroup');
+    const field = select ? select.closest('.field') : null;
+    return {
+      exists: Boolean(select),
+      inForm: Boolean(select && select.closest('#aiSettingsGroup .ai-settings-form')),
+      value: select ? select.value : null,
+      options: select ? [...select.options].map(option => [option.value, option.textContent.trim()]) : [],
+      fieldClasses: field ? [...field.classList] : [],
+      disabled: select ? select.disabled : null,
+      note: group ? group.querySelector('.setting-note').innerText : ''
+    };
+  });
+  assert(dom55.exists === true && dom55.inForm === true, '协议下拉缺失或不在 AI 配置表单内');
+  assert(dom55.value === 'openai', `协议下拉默认值应为 openai，实际 ${dom55.value}`);
+  const expectedOptions55 = [['openai', 'OpenAI 兼容'], ['anthropic', 'Anthropic Messages API']];
+  assert(JSON.stringify(dom55.options) === JSON.stringify(expectedOptions55), `协议选项不正确：${JSON.stringify(dom55.options)}`);
+  assert(dom55.fieldClasses.includes('field') && dom55.fieldClasses.includes('full'), `协议下拉应位于 field full：${JSON.stringify(dom55.fieldClasses)}`);
+  assert(dom55.disabled === false, '协议下拉不应禁用');
+  const noteWords55 = ['接口协议', '接口地址', '模型名', '随导出备份保存', 'API Key', '本机 Key', '界面只显示掩码'];
+  assert(noteWords55.every(word => dom55.note.includes(word)), `AI 分组说明缺少治理口径：${dom55.note}`);
+  passCheck(55);
+
+  const requestsBefore56 = mock.requests.length;
+  await page.click('#aiKeyEditButton');
+  await page.fill('#aiKeyInput', ANTHROPIC_KEY);
+  await page.fill('#aiEndpointInput', mockEndpoint);
+  await page.fill('#aiModelInput', model);
+  const formBefore56 = await page.evaluate(() => ({
+    endpoint: document.querySelector('#aiEndpointInput').value,
+    model: document.querySelector('#aiModelInput').value,
+    key: document.querySelector('#aiKeyInput').value,
+    keyVisible: document.querySelector('#aiKeyInput').getClientRects().length > 0,
+    mask: document.querySelector('#aiKeyMask').textContent.trim(),
+    status: document.querySelector('#aiSettingsStatus').textContent.trim()
+  }));
+  await page.selectOption('#aiProtocolSelect', 'anthropic');
+  const formAfter56 = await page.evaluate(() => ({
+    endpoint: document.querySelector('#aiEndpointInput').value,
+    model: document.querySelector('#aiModelInput').value,
+    key: document.querySelector('#aiKeyInput').value,
+    keyVisible: document.querySelector('#aiKeyInput').getClientRects().length > 0,
+    mask: document.querySelector('#aiKeyMask').textContent.trim(),
+    status: document.querySelector('#aiSettingsStatus').textContent.trim()
+  }));
+  assert(formAfter56.endpoint === formBefore56.endpoint && formAfter56.model === formBefore56.model, `切换协议不应改动地址或模型：${JSON.stringify(formAfter56)}`);
+  assert(formAfter56.keyVisible === true && formAfter56.key === ANTHROPIC_KEY, `切换协议不应清空 Key 输入：${JSON.stringify(formAfter56)}`);
+  assert(formAfter56.mask === formBefore56.mask, `切换协议不应改动 Key 掩码：${formAfter56.mask}`);
+  assert(formAfter56.status === formBefore56.status, `切换协议不应改动状态行：${formAfter56.status}`);
+  const unsaved56 = await readAi(page);
+  assert(unsaved56.protocol === 'openai', `切换协议不应隐式保存：${JSON.stringify(unsaved56)}`);
+  assert(mock.requests.length === requestsBefore56, '切换协议不得发起模型请求');
+
+  await page.click('#aiSettingsSave');
+  await waitToast(page, 'AI 配置已保存');
+  await waitSettingsReady(page);
+  const saved56 = await readAi(page);
+  assert(saved56.configured === true && saved56.protocol === 'anthropic', `保存后协议应为 anthropic：${JSON.stringify(saved56)}`);
+  assert(saved56.endpoint === mockEndpoint && saved56.model === model && saved56.keyMask === ANTHROPIC_KEY_MASK, `保存后配置不正确：${JSON.stringify(saved56)}`);
+  const select56 = await page.evaluate(() => document.querySelector('#aiProtocolSelect').value);
+  assert(select56 === 'anthropic', `保存后下拉应保持 anthropic，实际 ${select56}`);
+  await new Promise(resolve => setTimeout(resolve, 400));
+  const db56 = await readDbSettings(dbPath);
+  assert(db56.ai_protocol === 'anthropic' && db56.ai_endpoint === mockEndpoint, `协议未落库：${JSON.stringify(db56)}`);
+  assert(mock.requests.length === requestsBefore56, '保存配置不得发起模型请求');
+  passCheck(56);
+
+  await mock.resetMock();
+  const result57 = await parse(page, 'MOCK_CREATE');
+  assert(mock.requests.length === 1, `新增意图应只调用一次模型，实际 ${mock.requests.length}`);
+  const request57 = mock.requests[0];
+  assert(request57.protocol === 'anthropic', `请求应使用 Anthropic 协议：${request57.protocol}`);
+  assert(request57.method === 'POST' && request57.url === mockEndpoint, `请求行不正确：${request57.method} ${request57.url}`);
+  assert(request57.headers['content-type'] === 'application/json', `content-type 不正确：${request57.headers['content-type']}`);
+  assert(request57.headers['x-api-key'] === ANTHROPIC_KEY, `x-api-key 不正确：${request57.headers['x-api-key']}`);
+  assert(request57.headers['anthropic-version'] === ANTHROPIC_VERSION, `anthropic-version 不正确：${request57.headers['anthropic-version']}`);
+  assert(request57.headers.authorization === undefined && request57.headers.accept === undefined, `不应携带 OpenAI 请求头：${JSON.stringify(request57.headers)}`);
+  const bodyKeys57 = Object.keys(request57.body).sort().join(',');
+  assert(bodyKeys57 === 'max_tokens,messages,model,system,temperature', `请求体字段不正确：${bodyKeys57}`);
+  assert(request57.body.model === model && request57.body.max_tokens === ANTHROPIC_MAX_TOKENS && request57.body.temperature === 0, `请求体参数不正确：${JSON.stringify(request57.body)}`);
+  assert(typeof request57.body.system === 'string' && request57.body.system.includes('intent') && request57.body.system.includes('detectedIntents'), 'system 提示词未完整迁入');
+  assert(request57.body.messages.length === 1 && request57.body.messages.every(item => item.role !== 'system'), `messages 不应包含 system：${JSON.stringify(request57.body.messages)}`);
+  const user57 = JSON.parse(request57.body.messages[0].content);
+  assert(request57.body.messages[0].role === 'user' && Object.keys(user57).sort().join(',') === 'input,items,now' && user57.input === 'MOCK_CREATE', `user 消息不正确：${JSON.stringify(user57)}`);
+  assert(result57.ok === true && result57.intent === 'create' && typeof result57.omittedCount === 'number', `新增结果不正确：${JSON.stringify(result57)}`);
+  passCheck(57);
+
+  await mock.resetMock();
+  const result58 = await parse(page, 'MOCK_QUERY_THIS_MONTH');
+  assert(mock.requests.length === 2, `查询应调用两次模型，实际 ${mock.requests.length}`);
+  for (const request of mock.requests) {
+    assert(request.protocol === 'anthropic', `查询请求应使用 Anthropic 协议：${request.protocol}`);
+    assert(request.headers.authorization === undefined && request.headers['anthropic-version'] === ANTHROPIC_VERSION && request.headers['x-api-key'] === ANTHROPIC_KEY, `查询请求头不正确：${JSON.stringify(request.headers)}`);
+    assert(request.body.max_tokens === ANTHROPIC_MAX_TOKENS && request.body.temperature === 0, `查询请求参数不正确：${JSON.stringify(request.body)}`);
+    assert(typeof request.body.system === 'string', '查询请求缺少 system');
+    assert(request.body.messages.every(item => item.role !== 'system'), `查询 messages 不应包含 system：${JSON.stringify(request.body.messages)}`);
+  }
+  const first58 = JSON.parse(mock.requests[0].body.messages[0].content);
+  assert(first58.input === 'MOCK_QUERY_THIS_MONTH', `首次 user 消息不正确：${JSON.stringify(first58)}`);
+  const second58 = JSON.parse(mock.requests[1].body.messages[0].content);
+  assert(typeof second58.question === 'string', `第二次 user 消息缺少 question：${JSON.stringify(second58)}`);
+  assert(result58.ok === true && result58.intent === 'query' && result58.query.fallback === false, `查询结果不正确：${JSON.stringify(result58)}`);
+  assert(result58.query.answer === '按截止时间在本月内：已完成 1 个。', `答复未取第二次文本：${result58.query.answer}`);
+  assert(result58.query.meta && typeof result58.query.meta === 'object', '查询 meta 缺失');
+  passCheck(58);
+
+  const settingsBefore59 = await snapshotSettings(page);
+  const itemsBefore59 = await snapshotItems(page);
+  const failures59 = [];
+  const cases59 = [
+    ['MOCK_ANTHROPIC_MAX_TOKENS', 'invalid_response', true],
+    ['MOCK_EMPTY', 'empty_response', true],
+    ['MOCK_NOT_JSON', 'invalid_response', true],
+    ['MOCK_401', 'http_401', false],
+    ['MOCK_500', 'http_5xx', true]
+  ];
+  for (const [input, code, retryable] of cases59) {
+    await mock.resetMock();
+    const result = await parse(page, input);
+    failures59.push(result);
+    assert(result.ok === false && result.code === code && result.retryable === retryable, `${input} 错误映射不正确：${JSON.stringify(result)}`);
+  }
+
+  await mock.resetMock();
+  const started59 = Date.now();
+  const timeout59 = await parse(page, 'MOCK_SLOW');
+  const elapsed59 = Date.now() - started59;
+  failures59.push(timeout59);
+  assert(elapsed59 < 1200, `超时应快速返回，实际 ${elapsed59}ms`);
+  assert(timeout59.ok === false && timeout59.code === 'timeout' && timeout59.retryable === true, `超时错误不正确：${JSON.stringify(timeout59)}`);
+
+  const networkSave59 = await saveAi(page, { endpoint: 'http://127.0.0.1:1/v1/messages', model });
+  assert(networkSave59.ok === true, `切换网络失败端点应保存成功：${JSON.stringify(networkSave59)}`);
+  await mock.resetMock();
+  const network59 = await parse(page, 'MOCK_CREATE');
+  failures59.push(network59);
+  assert(network59.ok === false && network59.code === 'network' && network59.retryable === true, `网络失败错误不正确：${JSON.stringify(network59)}`);
+  assert(mock.requests.length === 0, '网络失败不应到达 mock 服务');
+
+  const restoreSave59 = await saveAi(page, { endpoint: mockEndpoint, model });
+  assert(restoreSave59.ok === true, `恢复端点应保存成功：${JSON.stringify(restoreSave59)}`);
+  assert(restoreSave59.ai.protocol === 'anthropic', `省略协议应保留 anthropic：${JSON.stringify(restoreSave59.ai)}`);
+  const ai59 = await readAi(page);
+  assert(ai59.protocol === 'anthropic', `恢复端点后协议应仍为 anthropic：${JSON.stringify(ai59)}`);
+
+  const settingsAfter59 = await snapshotSettings(page);
+  const itemsAfter59 = await snapshotItems(page);
+  assert(settingsAfter59 === settingsBefore59, '错误路径不应改动设置');
+  assert(itemsAfter59 === itemsBefore59, '错误路径不应改动事项');
+  for (const failure of failures59) {
+    const text = `${failure.code} ${failure.message}`;
+    assert(text.includes(ANTHROPIC_KEY) === false, `错误提示不应包含 Key：${text}`);
+    assert(text.includes('secret-body') === false, `错误提示不应包含响应体：${text}`);
+  }
+  passCheck(59);
+
+  const requestsBefore61 = mock.requests.length;
+  const ai61Before = await readAi(page);
+  assert(ai61Before.protocol === 'anthropic', `备份前协议应为 anthropic：${JSON.stringify(ai61Before)}`);
+
+  fs.rmSync(STAGE_I_BACKUP, { force: true });
+  await patchSaveDialog(electronApp, STAGE_I_BACKUP);
+  await page.click('#backupButton');
+  await waitToast(page, '备份已保存');
+  assert(fs.existsSync(STAGE_I_BACKUP) === true, '备份文件应生成');
+  assert(mock.requests.length === requestsBefore61, `备份不应调用模型，实际 ${mock.requests.length}`);
+
+  fs.rmSync(STAGE_I_EXTRACT, { recursive: true, force: true });
+  fs.mkdirSync(STAGE_I_EXTRACT, { recursive: true });
+  await extract(STAGE_I_BACKUP, { dir: STAGE_I_EXTRACT });
+  assert(fs.existsSync(STAGE_I_DB) === true, '备份应包含数据库');
+  assert(fs.existsSync(path.join(STAGE_I_EXTRACT, 'manifest.json')) === true, '备份应包含 manifest');
+
+  const settings61 = await readDbSettings(STAGE_I_DB);
+  assert(settings61.ai_protocol === 'anthropic', `备份应保留协议：${JSON.stringify(settings61)}`);
+  assert(settings61.ai_endpoint === mockEndpoint && settings61.ai_model === model, `备份应保留地址与模型：${JSON.stringify(settings61)}`);
+  assert(settings61.ai_api_key === undefined, `备份不应包含 API Key：${JSON.stringify(settings61)}`);
+  assert(fs.readFileSync(STAGE_I_DB).includes(Buffer.from(ANTHROPIC_KEY)) === false, '备份数据库不应包含 Key 字节');
+  const manifestText61 = fs.readFileSync(path.join(STAGE_I_EXTRACT, 'manifest.json'), 'utf8');
+  assert(manifestText61.includes(ANTHROPIC_KEY) === false, 'manifest 不应包含 Key');
+
+  await buildRestoreZip(STAGE_I_DB, STAGE_I_RESTORE, STAGE_I_RESTORE_DB);
+  const switchSave61 = await saveAi(page, { endpoint: mockEndpoint, model, protocol: 'openai' });
+  assert(switchSave61.ok === true && switchSave61.ai.protocol === 'openai', `本机协议应改为 openai：${JSON.stringify(switchSave61)}`);
+  const local61 = await readAi(page);
+  assert(local61.protocol === 'openai', `恢复前本机协议应为 openai：${JSON.stringify(local61)}`);
+
+  await patchOpenDialog(electronApp, STAGE_I_RESTORE);
+  await page.click('#restoreButton');
+  await waitAssistant(page, '#confirmModal.open');
+  await page.click('#confirmAccept');
+  await waitToast(page, '备份已恢复');
+  await waitSettingsLoaded(page, BACKUP_ENDPOINT);
+
+  const ai61 = await readAi(page);
+  assert(ai61.protocol === 'anthropic', `恢复后协议应来自备份：${JSON.stringify(ai61)}`);
+  assert(ai61.endpoint === BACKUP_ENDPOINT && ai61.model === BACKUP_MODEL, `恢复后地址与模型不正确：${JSON.stringify(ai61)}`);
+  assert(ai61.keyMask === ANTHROPIC_KEY_MASK && ai61.configured === true, `恢复后应回填本机 Key：${JSON.stringify(ai61)}`);
+  const dom61 = await page.evaluate(() => ({
+    protocol: document.querySelector('#aiProtocolSelect').value,
+    status: document.querySelector('#aiSettingsStatus').dataset.aiStatus
+  }));
+  assert(dom61.protocol === 'anthropic', `恢复后下拉未同步：${dom61.protocol}`);
+  assert(dom61.status === 'ready', `恢复后状态行不正确：${dom61.status}`);
+  await new Promise(resolve => setTimeout(resolve, 400));
+  assert(fs.readFileSync(dbPath).includes(Buffer.from(BACKUP_KEY)) === false, '备份 Key 不应残留在本机数据库');
+  passCheck(61);
+
+  await page.selectOption('#aiProtocolSelect', 'openai');
+  await page.fill('#aiEndpointInput', mockEndpoint);
+  await page.fill('#aiModelInput', model);
+  await page.click('#aiSettingsSave');
+  await waitToast(page, 'AI 配置已保存');
+  await waitSettingsReady(page);
+  const saved60 = await readAi(page);
+  assert(saved60.protocol === 'openai', `切回 OpenAI 后协议不正确：${JSON.stringify(saved60)}`);
+  await new Promise(resolve => setTimeout(resolve, 400));
+  const db60 = await readDbSettings(dbPath);
+  assert(db60.ai_protocol === 'openai', `切回 OpenAI 后协议未落库：${JSON.stringify(db60)}`);
+
+  await mock.resetMock();
+  const result60 = await parse(page, 'MOCK_CREATE');
+  assert(mock.requests.length === 1, `切回 OpenAI 后应只调用一次模型，实际 ${mock.requests.length}`);
+  const request60 = mock.requests[0];
+  assert(request60.protocol === 'openai', `请求应使用 OpenAI 协议：${request60.protocol}`);
+  assert(request60.headers.authorization === `Bearer ${ANTHROPIC_KEY}`, `Authorization 不正确：${request60.headers.authorization}`);
+  assert(request60.headers['anthropic-version'] === undefined && request60.headers['x-api-key'] === undefined, `不应携带 Anthropic 请求头：${JSON.stringify(request60.headers)}`);
+  const bodyKeys60 = Object.keys(request60.body).sort().join(',');
+  assert(bodyKeys60 === 'messages,model,temperature', `请求体字段不正确：${bodyKeys60}`);
+  assert(request60.body.messages.length === 2, `messages 应为 system+user：${JSON.stringify(request60.body.messages)}`);
+  assert(request60.body.messages[0].role === 'system' && request60.body.messages[1].role === 'user', `messages 角色不正确：${JSON.stringify(request60.body.messages)}`);
+  assert(result60.ok === true && result60.intent === 'create', `切回 OpenAI 后结果不正确：${JSON.stringify(result60)}`);
+  passCheck(60);
+}
+
 (async () => {
   fs.rmSync(dataDir, { recursive: true, force: true });
   fs.mkdirSync(outputDir, { recursive: true });
@@ -2213,6 +2501,11 @@ async function runStageH2(electronApp, mock, pageErrors) {
     assert(fs.readFileSync(dbPath).includes(Buffer.from(BACKUP_KEY)) === false, '备份 Key 不应残留在本机数据库');
     passCheck(50);
 
+    electronApp = await launchApp();
+    await runStageI(electronApp, mock, pageErrors);
+    await stopApp(electronApp);
+    electronApp = null;
+
     assert(pageErrors.length === 0, `页面异常应为空，实际 ${JSON.stringify(pageErrors)}`);
     passCheck(24);
 
@@ -2220,7 +2513,7 @@ async function runStageH2(electronApp, mock, pageErrors) {
       .filter(key => passed.has(key))
       .sort((a, b) => Number(a) - Number(b))
       .map(key => `${key}. ${CHECK_TITLES[key]}`);
-    assert(checks.length === 54, `断言数量应为 54，实际 ${checks.length}`);
+    assert(checks.length === 61, `断言数量应为 61，实际 ${checks.length}`);
     console.log(JSON.stringify({ passed: true, checks }));
   } finally {
     if (electronApp) await stopApp(electronApp);

@@ -49,6 +49,11 @@ const SET_AI_MODEL_TOO_LONG = '模型名内容过长';
 const SET_AI_KEY_TOO_LONG = 'API Key 内容过长';
 const SET_AI_FORBIDDEN = '当前窗口无权执行该操作';
 const SET_AI_SAVE_FAILED = '保存失败，请重试';
+const SET_AI_INVALID_PROTOCOL = '接口协议不正确';
+
+const ANTHROPIC_ENDPOINT = 'https://api.anthropic.com/v1/messages';
+const ANTHROPIC_VERSION = '2023-06-01';
+const ANTHROPIC_MAX_TOKENS = 4096;
 
 // ---------- 通用工具 ----------
 
@@ -73,6 +78,22 @@ function httpResponse({ status = 200, body = '' } = {}) {
 
 function chatEnvelope(content, { status = 200, finishReason = 'stop' } = {}) {
   return httpResponse({ status, body: chatBody(content, finishReason) });
+}
+
+function anthropicBody(textOrParts, { stopReason = 'end_turn', extra } = {}) {
+  const content = Array.isArray(textOrParts) ? textOrParts : [{ type: 'text', text: textOrParts }];
+  return JSON.stringify({
+    id: 'mock',
+    type: 'message',
+    role: 'assistant',
+    content,
+    stop_reason: stopReason,
+    ...extra
+  });
+}
+
+function anthropicEnvelope(textOrParts, { status = 200, stopReason } = {}) {
+  return httpResponse({ status, body: anthropicBody(textOrParts, { stopReason }) });
 }
 
 function createWindowStub(destroyed = false) {
@@ -170,7 +191,7 @@ async function readSettingsFile(file) {
   const SQL = await loadSqlJs();
   const db = new SQL.Database(fs.readFileSync(file));
   try {
-    const result = db.exec("SELECT key, value FROM settings WHERE key IN ('ai_endpoint','ai_model','ai_api_key')");
+    const result = db.exec("SELECT key, value FROM settings WHERE key IN ('ai_endpoint','ai_model','ai_api_key','ai_protocol')");
     if (!result.length) return {};
     return Object.fromEntries(result[0].values.map(row => [row[0], row[1]]));
   } finally {
@@ -215,6 +236,7 @@ async function createBackupFixture(destination, options) {
     db.run('INSERT INTO settings (key, value) VALUES (?, ?)', ['ai_endpoint', options.endpoint]);
     db.run('INSERT INTO settings (key, value) VALUES (?, ?)', ['ai_model', options.model]);
     db.run('INSERT INTO settings (key, value) VALUES (?, ?)', ['ai_api_key', options.apiKey]);
+    if (typeof options.protocol === 'string') db.run('INSERT INTO settings (key, value) VALUES (?, ?)', ['ai_protocol', options.protocol]);
     db.run(
       'INSERT INTO items (kind, title, description, deadline, status, work_type) VALUES (?, ?, ?, ?, ?, ?)',
       ['assignment', options.title, '', `${localDate(1)} 23:59`, 'not_started', 'personal']
@@ -539,6 +561,7 @@ describe('助手后端单元测试（detail_v1）', () => {
       });
       h.setDatabase(db);
       assert.deepEqual(plain(h.fn('readAiConfig')()), {
+        protocol: 'openai',
         endpoint: 'https://api.example.com/v1/chat/completions',
         model: 'gpt-x',
         apiKey: 'key-abc'
@@ -552,13 +575,14 @@ describe('助手后端单元测试（detail_v1）', () => {
 
     test('F1.4 buildAiSettingsView：未配置时 configured=false 且掩码为空', () => {
       const view = h.fn('buildAiSettingsView')();
-      assert.deepEqual(plain(view), { configured: false, endpoint: '', model: '', keyMask: '' });
+      assert.deepEqual(plain(view), { configured: false, protocol: 'openai', endpoint: '', model: '', keyMask: '' });
     });
 
     test('F1.4 buildAiSettingsView：三项合法时 configured=true 且返回首尾掩码', () => {
       h.setDatabase(configuredDatabase());
       assert.deepEqual(plain(h.fn('buildAiSettingsView')()), {
         configured: true,
+        protocol: 'openai',
         endpoint: MOCK_ENDPOINT,
         model: MODEL,
         keyMask: KEY_MASK
@@ -571,6 +595,7 @@ describe('助手后端单元测试（detail_v1）', () => {
       }));
       const badEndpoint = h.fn('buildAiSettingsView')();
       assert.equal(badEndpoint.configured, false);
+      assert.equal(badEndpoint.protocol, 'openai');
       assert.equal(badEndpoint.endpoint, 'ftp://x');
       assert.equal(badEndpoint.keyMask, KEY_MASK);
 
@@ -602,9 +627,9 @@ describe('助手后端单元测试（detail_v1）', () => {
         notificationsEnabled: true,
         widgetEnabled: true,
         dataPath: expectedRoot,
-        ai: { configured: false, endpoint: '', model: '', keyMask: '' }
+        ai: { configured: false, protocol: 'openai', endpoint: '', model: '', keyMask: '' }
       });
-      assert.equal(Object.keys(result.ai).length, 4);
+      assert.equal(Object.keys(result.ai).length, 5);
     });
 
     test('F1.6 settings:get：读取已有配置且绝不返回完整 Key', () => {
@@ -617,6 +642,7 @@ describe('助手后端单元测试（detail_v1）', () => {
       assert.equal(result.widgetEnabled, false);
       assert.deepEqual(plain(result.ai), {
         configured: true,
+        protocol: 'openai',
         endpoint: MOCK_ENDPOINT,
         model: MODEL,
         keyMask: KEY_MASK
@@ -629,6 +655,7 @@ describe('助手后端单元测试（detail_v1）', () => {
       assert.equal(result.ok, true);
       assert.deepEqual(plain(result.ai), {
         configured: true,
+        protocol: 'openai',
         endpoint: MOCK_ENDPOINT,
         model: MODEL,
         keyMask: KEY_MASK
@@ -636,6 +663,7 @@ describe('助手后端单元测试（detail_v1）', () => {
       assert.equal(h.database.settings.get('ai_endpoint'), MOCK_ENDPOINT);
       assert.equal(h.database.settings.get('ai_model'), MODEL);
       assert.equal(h.database.settings.get('ai_api_key'), KEY);
+      assert.equal(h.database.settings.get('ai_protocol'), 'openai');
       assert.ok(!JSON.stringify(result).includes(KEY));
     });
 
@@ -720,6 +748,7 @@ describe('助手后端单元测试（detail_v1）', () => {
       assert.equal(result.ok, true);
       assert.deepEqual(plain(result.ai), {
         configured: false,
+        protocol: 'openai',
         endpoint: '',
         model: '',
         keyMask: KEY_MASK
@@ -789,6 +818,7 @@ describe('助手后端单元测试（detail_v1）', () => {
         ai_endpoint: 'http://127.0.0.1:9/v2/chat',
         ai_model: 'next-model',
         ai_api_key: 'next-key-12345678',
+        ai_protocol: 'openai',
         notifications_enabled: 'true',
         widget_enabled: 'false',
         data_path: 'D:/data'
@@ -814,6 +844,7 @@ describe('助手后端单元测试（detail_v1）', () => {
       const result = plain(h.settingsGet());
       assert.deepEqual(result.ai, {
         configured: true,
+        protocol: 'openai',
         endpoint: MOCK_ENDPOINT,
         model: MODEL,
         keyMask: KEY_MASK
@@ -3674,7 +3705,7 @@ describe('助手后端单元测试（detail_v1）', () => {
         });
         await h.fn('restoreBackupArchive')(fixtureZip);
 
-        assert.deepEqual(plain(h.fn('readAiConfig')()), { endpoint: BACKUP_ENDPOINT, model: BACKUP_MODEL, apiKey: KEY });
+        assert.deepEqual(plain(h.fn('readAiConfig')()), { protocol: 'openai', endpoint: BACKUP_ENDPOINT, model: BACKUP_MODEL, apiKey: KEY });
         const view = plain(h.fn('buildAiSettingsView')());
         assert.equal(view.configured, true);
         assert.equal(view.keyMask, KEY_MASK);
@@ -3817,6 +3848,512 @@ describe('助手后端单元测试（detail_v1）', () => {
         assert.equal(settings.ai_api_key, KEY);
         assert.equal(fs.readFileSync(dbFile).includes(Buffer.from(BACKUP_KEY)), false, '备份 Key 不应落盘');
       });
+    });
+  });
+
+  // ============ F29 接口协议与双协议契约 ============
+
+  describe('F29 接口协议与双协议契约', () => {
+    const anthropicDatabase = (extra = {}) => createFakeDatabase({
+      settings: { ai_endpoint: ANTHROPIC_ENDPOINT, ai_model: MODEL, ai_api_key: KEY, ai_protocol: 'anthropic' },
+      ...extra
+    });
+
+    test('F29.1 normalizeAiProtocol / readAiConfig：协议缺省与非法值回退', () => {
+      const normalize = h.fn('normalizeAiProtocol');
+      assert.equal(normalize('anthropic'), 'anthropic');
+      for (const value of ['openai', undefined, null, '', 'OpenAI', ' anthropic ', 123, {}]) {
+        assert.equal(normalize(value), 'openai', `${String(value)} 应回落 openai`);
+      }
+
+      h.setDatabase(createFakeDatabase());
+      assert.deepEqual(plain(h.fn('readAiConfig')()), { protocol: 'openai', endpoint: '', model: '', apiKey: '' });
+
+      const cases = [
+        ['', 'openai'],
+        ['anthropic', 'anthropic'],
+        ['Anthropic', 'openai'],
+        ['foo', 'openai']
+      ];
+      for (const [stored, expected] of cases) {
+        const db = createFakeDatabase({
+          settings: { ai_endpoint: MOCK_ENDPOINT, ai_model: MODEL, ai_api_key: KEY, ai_protocol: stored }
+        });
+        h.setDatabase(db);
+        assert.equal(h.fn('readAiConfig')().protocol, expected, `${stored} 读取协议不正确`);
+        assert.deepEqual(settingsSnapshot(db), {
+          ai_endpoint: MOCK_ENDPOINT,
+          ai_model: MODEL,
+          ai_api_key: KEY,
+          ai_protocol: stored
+        });
+      }
+    });
+
+    test('F29.2 buildAiSettingsView / settings:get：协议与既有字段同级', () => {
+      h.setDatabase(createFakeDatabase());
+      assert.deepEqual(plain(h.fn('buildAiSettingsView')()), {
+        configured: false,
+        protocol: 'openai',
+        endpoint: '',
+        model: '',
+        keyMask: ''
+      });
+
+      h.setDatabase(anthropicDatabase());
+      assert.deepEqual(plain(h.fn('buildAiSettingsView')()), {
+        configured: true,
+        protocol: 'anthropic',
+        endpoint: ANTHROPIC_ENDPOINT,
+        model: MODEL,
+        keyMask: KEY_MASK
+      });
+
+      h.setDatabase(configuredDatabase());
+      const legacy = plain(h.fn('buildAiSettingsView')());
+      assert.equal(legacy.protocol, 'openai');
+      assert.equal(legacy.configured, true);
+
+      h.setDatabase(anthropicDatabase());
+      const result = plain(h.settingsGet());
+      assert.equal(result.ai.protocol, 'anthropic');
+      assert.equal(Object.keys(result.ai).length, 5);
+      assert.ok(!JSON.stringify(result).includes(KEY));
+    });
+
+    test('F29.3 settings:set-ai：保存 / 省略 / 非法协议与零写入', () => {
+      h.setDatabase(createFakeDatabase());
+      const saved = h.saveAi({ endpoint: ANTHROPIC_ENDPOINT, model: MODEL, apiKey: KEY, protocol: 'anthropic' });
+      assert.equal(saved.ok, true);
+      assert.equal(saved.ai.protocol, 'anthropic');
+      assert.equal(h.database.settings.get('ai_protocol'), 'anthropic');
+
+      h.setDatabase(anthropicDatabase());
+      const omitted = h.saveAi({ endpoint: ANTHROPIC_ENDPOINT, model: 'next-model' });
+      assert.equal(omitted.ok, true);
+      assert.equal(omitted.ai.protocol, 'anthropic');
+      assert.equal(h.database.settings.get('ai_protocol'), 'anthropic');
+      assert.equal(h.database.settings.get('ai_model'), 'next-model');
+
+      h.setDatabase(createFakeDatabase());
+      const first = h.saveAi({ endpoint: MOCK_ENDPOINT, model: MODEL, apiKey: KEY });
+      assert.equal(first.ok, true);
+      assert.equal(first.ai.protocol, 'openai');
+      assert.equal(h.database.settings.get('ai_protocol'), 'openai');
+
+      h.setDatabase(anthropicDatabase());
+      const switched = h.saveAi({ endpoint: MOCK_ENDPOINT, model: MODEL, protocol: 'openai' });
+      assert.equal(switched.ok, true);
+      assert.equal(switched.ai.protocol, 'openai');
+      assert.equal(h.database.settings.get('ai_protocol'), 'openai');
+
+      const db = anthropicDatabase();
+      h.setDatabase(db);
+      const before = settingsSnapshot(db);
+      for (const protocol of [null, 123, {}, [], '', 'OPENAI', ' anthropic ', 'foo']) {
+        const result = h.saveAi({ endpoint: MOCK_ENDPOINT, model: 'next-model', apiKey: 'next-key-12345678', protocol });
+        assert.equal(result.ok, false, `${String(protocol)} 应被拒绝`);
+        assert.equal(result.message, SET_AI_INVALID_PROTOCOL);
+      }
+      assert.deepEqual(settingsSnapshot(db), before);
+
+      const invalidEndpoint = h.saveAi({ endpoint: 'ftp://x', model: MODEL, protocol: 'foo' });
+      assert.equal(invalidEndpoint.ok, false);
+      assert.equal(invalidEndpoint.message, SET_AI_INVALID_ENDPOINT);
+
+      const broken = configuredDatabase();
+      broken.state.failPrepare = true;
+      h.setDatabase(broken);
+      const failure = h.saveAi({ endpoint: MOCK_ENDPOINT, model: MODEL, apiKey: KEY });
+      assert.equal(failure.ok, false);
+      assert.equal(failure.message, SET_AI_SAVE_FAILED);
+    });
+
+    test('F29.4 callChatCompletion（openai）回归：请求头/体保持不变', async () => {
+      const messages = [
+        { role: 'system', content: 'system' },
+        { role: 'user', content: 'user' }
+      ];
+      for (const protocol of ['openai', undefined, 'foo']) {
+        h.fetchCalls.length = 0;
+        h.setFetch(() => Promise.resolve(httpResponse({ status: 200, body: '{"ok":true}' })));
+        const chat = await h.fn('callChatCompletion')({
+          endpoint: MOCK_ENDPOINT,
+          apiKey: KEY,
+          model: MODEL,
+          messages,
+          timeoutMs: 500,
+          protocol
+        });
+        assert.deepEqual(plain(chat), { status: 200, ok: true, text: '{"ok":true}' });
+        const request = h.fetchCalls[0];
+        assert.equal(request.url, MOCK_ENDPOINT);
+        assert.equal(request.init.method, 'POST');
+        assert.deepEqual(Object.keys(request.init.headers).sort(), ['Accept', 'Authorization', 'Content-Type']);
+        assert.equal(request.init.headers.Authorization, `Bearer ${KEY}`);
+        const body = JSON.parse(request.init.body);
+        assert.deepEqual(Object.keys(body).sort(), ['messages', 'model', 'temperature']);
+        assert.deepEqual(body.messages, messages);
+        assert.equal(body.system, undefined);
+        assert.equal(body.max_tokens, undefined);
+      }
+    });
+
+    test('F29.5 callChatCompletion（anthropic）请求契约', async () => {
+      h.setFetch(() => Promise.resolve(anthropicEnvelope('ok')));
+      const messages = [
+        { role: 'system', content: 'A' },
+        { role: 'system', content: 'B' },
+        { role: 'user', content: 'u1' },
+        { role: 'assistant', content: 'a1' },
+        { role: 'user', content: 'u2' }
+      ];
+      const chat = await h.fn('callChatCompletion')({
+        endpoint: ANTHROPIC_ENDPOINT,
+        apiKey: KEY,
+        model: MODEL,
+        messages,
+        timeoutMs: 500,
+        protocol: 'anthropic'
+      });
+      assert.equal(chat.status, 200);
+
+      const request = h.fetchCalls[0];
+      assert.equal(request.url, ANTHROPIC_ENDPOINT);
+      assert.equal(request.init.method, 'POST');
+      assert.deepEqual(Object.keys(request.init.headers).sort(), ['anthropic-version', 'content-type', 'x-api-key']);
+      assert.equal(request.init.headers['anthropic-version'], ANTHROPIC_VERSION);
+      assert.equal(request.init.headers['content-type'], 'application/json');
+      assert.equal(request.init.headers['x-api-key'], KEY);
+      assert.equal(request.init.headers.Authorization, undefined);
+      assert.equal(request.init.headers.Accept, undefined);
+
+      const body = JSON.parse(request.init.body);
+      assert.deepEqual(Object.keys(body).sort(), ['max_tokens', 'messages', 'model', 'system', 'temperature']);
+      assert.equal(body.model, MODEL);
+      assert.equal(body.max_tokens, ANTHROPIC_MAX_TOKENS);
+      assert.equal(body.temperature, 0);
+      assert.equal(body.system, 'A\n\nB');
+      assert.deepEqual(body.messages, [
+        { role: 'user', content: 'u1' },
+        { role: 'assistant', content: 'a1' },
+        { role: 'user', content: 'u2' }
+      ]);
+      assert.ok(request.init.signal);
+      assert.equal(request.init.signal.aborted, false);
+
+      h.fetchCalls.length = 0;
+      await h.fn('callChatCompletion')({
+        endpoint: ANTHROPIC_ENDPOINT,
+        apiKey: KEY,
+        model: MODEL,
+        messages: [{ role: 'user', content: 'hi' }],
+        timeoutMs: 500,
+        protocol: 'anthropic'
+      });
+      const noSystem = JSON.parse(h.fetchCalls[0].init.body);
+      assert.deepEqual(Object.keys(noSystem).sort(), ['max_tokens', 'messages', 'model', 'temperature']);
+
+      h.fetchCalls.length = 0;
+      await h.fn('callChatCompletion')({
+        endpoint: ANTHROPIC_ENDPOINT,
+        apiKey: KEY,
+        model: MODEL,
+        messages: [{ role: 'system', content: '' }, { role: 'user', content: 'hi' }],
+        timeoutMs: 500,
+        protocol: 'anthropic'
+      });
+      assert.equal(JSON.parse(h.fetchCalls[0].init.body).system, '');
+
+      h.setFetch(() => Promise.resolve(anthropicEnvelope('error body', { status: 500 })));
+      const failed = await h.fn('callChatCompletion')({
+        endpoint: ANTHROPIC_ENDPOINT,
+        apiKey: KEY,
+        model: MODEL,
+        messages: [{ role: 'user', content: 'hi' }],
+        timeoutMs: 500,
+        protocol: 'anthropic'
+      });
+      assert.equal(failed.status, 500);
+      assert.equal(failed.ok, false);
+
+      h.setFetch(() => Promise.reject(Object.assign(new Error('net::ERR_CONNECTION_REFUSED'), { code: 'ERR_CONNECTION_REFUSED' })));
+      const network = await captureRejection(h.fn('callChatCompletion')({
+        endpoint: ANTHROPIC_ENDPOINT,
+        apiKey: KEY,
+        model: MODEL,
+        messages: [],
+        timeoutMs: 500,
+        protocol: 'anthropic'
+      }));
+      assert.equal(network.code, 'network');
+      assert.equal(network.message, NETWORK_MESSAGE);
+      assert.equal(network.retryable, true);
+
+      h.setFetch(() => new Promise(() => {}));
+      const timeout = await captureRejection(h.fn('callChatCompletion')({
+        endpoint: ANTHROPIC_ENDPOINT,
+        apiKey: KEY,
+        model: MODEL,
+        messages: [],
+        timeoutMs: 40,
+        protocol: 'anthropic'
+      }));
+      assert.equal(timeout.code, 'timeout');
+      assert.equal(timeout.message, TIMEOUT_MESSAGE);
+      assert.equal(timeout.retryable, true);
+    });
+
+    test('F29.6 readChatText / readAssistantPayload（anthropic）解析', () => {
+      const read = h.fn('readChatText');
+      const mixed = anthropicBody([
+        { type: 'text', text: '{"intent":' },
+        { type: 'image', source: { type: 'base64' } },
+        { type: 'text', text: '"create"}' },
+        { type: 'text', text: 123 }
+      ]);
+      assert.equal(read({ status: 200, ok: true, text: mixed }, 'anthropic'), '{"intent":"create"}');
+
+      const raw = anthropicBody([
+        { type: 'text', text: '  {"a":' },
+        { type: 'text', text: '1}  ' }
+      ]);
+      assert.equal(read({ status: 200, ok: true, text: raw }, 'anthropic'), '  {"a":1}  ');
+
+      const truncated = captureFailure(() => read(
+        { status: 200, ok: true, text: anthropicBody([{ type: 'text', text: 'partial' }], { stopReason: 'max_tokens' }) },
+        'anthropic'
+      ));
+      assert.equal(truncated.code, 'invalid_response');
+      assert.equal(truncated.retryable, true);
+
+      for (const content of [[], [{ type: 'text', text: '' }], [{ type: 'text', text: '   ' }], [{ type: 'image' }]]) {
+        const empty = captureFailure(() => read({ status: 200, ok: true, text: anthropicBody(content) }, 'anthropic'));
+        assert.equal(empty.code, 'empty_response', `${JSON.stringify(content)} 应视为空响应`);
+        assert.equal(empty.message, EMPTY_RESPONSE_MESSAGE);
+        assert.equal(empty.retryable, true);
+      }
+
+      for (const [status, code] of [[401, 'http_401'], [429, 'http_429'], [500, 'http_5xx'], [418, 'http_other']]) {
+        const failure = captureFailure(() => read({ status, ok: false, text: '' }, 'anthropic'));
+        assert.equal(failure.code, code, `HTTP ${status} 映射不正确`);
+      }
+
+      for (const text of ['not json', '{}', '{"content":null}', '{"content":"text"}', '{"content":{}}']) {
+        const invalid = captureFailure(() => read({ status: 200, ok: true, text }, 'anthropic'));
+        assert.equal(invalid.code, 'invalid_response', `${text} 应解析失败`);
+      }
+
+      assert.equal(read({ status: 200, ok: true, text: anthropicBody([{ type: 'text', text: 'ok' }]) }, 'anthropic'), 'ok');
+      assert.equal(read({ status: 200, ok: true, text: JSON.stringify({ content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn' }) }, 'anthropic'), 'ok');
+      assert.equal(read({ status: 200, ok: true, text: JSON.stringify({ content: [{ type: 'text', text: 'ok' }] }) }, 'anthropic'), 'ok');
+
+      assert.deepEqual(
+        plain(h.fn('readAssistantPayload')({ status: 200, ok: true, text: anthropicBody('```json\n{"intent":"create"}\n```') }, 'anthropic')),
+        { intent: 'create' }
+      );
+      const extractFailure = captureFailure(() => h.fn('readAssistantPayload')({ status: 200, ok: true, text: anthropicBody('no json here') }, 'anthropic'));
+      assert.equal(extractFailure.code, 'invalid_response');
+    });
+
+    test('F29.7 assistant:parse（anthropic）端到端：请求、查询与失败映射', async () => {
+      const createPayload = {
+        intent: 'create',
+        message: '已整理候选',
+        create: {
+          candidates: [{ title: '新事项', kind: 'assignment', deadline: `${localDate(5)} 23:59`, status: 'not_started' }]
+        }
+      };
+
+      h.setDatabase(anthropicDatabase());
+      h.setFetch(() => Promise.resolve(anthropicEnvelope(JSON.stringify(createPayload))));
+      const created = await h.parse('新增一个事项');
+      assert.equal(created.ok, true);
+      assert.equal(created.intent, 'create');
+      assert.equal(created.create.candidates.length, 1);
+      const createBody = JSON.parse(h.fetchCalls[0].init.body);
+      assert.equal(createBody.system, h.fn('buildAssistantSystemPrompt')());
+      assert.deepEqual(createBody.messages.map(message => message.role), ['user']);
+      assert.equal(createBody.max_tokens, ANTHROPIC_MAX_TOKENS);
+      assert.equal(h.fetchCalls[0].init.headers.Authorization, undefined);
+
+      const queryItems = [
+        { id: 1, title: '本月已完成大作业', kind: 'assignment', deadline: monthDate(0, 5, '09:00'), status: 'completed', work_type: 'personal' },
+        { id: 2, title: '本月未完成活动', kind: 'activity', deadline: monthDate(0, 20, '18:00'), status: 'not_completed', work_type: null }
+      ];
+      h.fetchCalls.length = 0;
+      h.setDatabase(createFakeDatabase({
+        settings: { ai_endpoint: ANTHROPIC_ENDPOINT, ai_model: MODEL, ai_api_key: KEY, ai_protocol: 'anthropic' },
+        items: queryItems
+      }));
+      h.setFetch((_url, init) => {
+        const body = JSON.parse(init.body);
+        const first = JSON.parse(body.messages[0].content);
+        if ('question' in first) return Promise.resolve(anthropicEnvelope('按截止时间在本月内：已完成 1 个。'));
+        return Promise.resolve(anthropicEnvelope(JSON.stringify({
+          intent: 'query',
+          query: { range: { type: 'this_month' }, kind: 'all', status: 'completed', shape: 'count' }
+        })));
+      });
+      const queried = await h.parse('查询本月已完成的事项');
+      assert.equal(queried.ok, true);
+      assert.equal(queried.intent, 'query');
+      assert.equal(queried.query.answer, '按截止时间在本月内：已完成 1 个。');
+      assert.equal(queried.query.fallback, false);
+      assert.equal(h.fetchCalls.length, 2);
+      for (const call of h.fetchCalls) {
+        const body = JSON.parse(call.init.body);
+        assert.equal(call.init.headers.Authorization, undefined);
+        assert.equal(body.max_tokens, ANTHROPIC_MAX_TOKENS);
+        assert.equal(typeof body.system, 'string');
+        assert.ok(body.messages.every(message => message.role !== 'system'));
+      }
+
+      h.fetchCalls.length = 0;
+      h.setFetch((_url, init) => {
+        const body = JSON.parse(init.body);
+        const first = JSON.parse(body.messages[0].content);
+        if ('question' in first) {
+          return Promise.resolve(anthropicEnvelope([{ type: 'text', text: 'partial' }], { stopReason: 'max_tokens' }));
+        }
+        return Promise.resolve(anthropicEnvelope(JSON.stringify({
+          intent: 'query',
+          query: { range: { type: 'this_month' }, status: 'completed', shape: 'count' }
+        })));
+      });
+      const degraded = await h.parse('查本月完成情况');
+      assert.equal(degraded.ok, true);
+      assert.equal(degraded.query.fallback, true);
+      assert.equal(h.fetchCalls.length, 2);
+
+      const db = anthropicDatabase();
+      h.setDatabase(db);
+      const settingsBefore = JSON.stringify(settingsSnapshot(db));
+      const itemsBefore = h.itemsSnapshot();
+      const scenarios = [
+        [() => Promise.resolve(anthropicEnvelope([{ type: 'text', text: 'partial' }], { stopReason: 'max_tokens' })), 'invalid_response', true],
+        [() => Promise.resolve(anthropicEnvelope([])), 'empty_response', true],
+        [() => Promise.resolve(httpResponse({ status: 401, body: '{"error":{"message":"secret"}}' })), 'http_401', false],
+        [() => Promise.reject(Object.assign(new Error('net::ERR_CONNECTION_REFUSED'), { code: 'ERR_CONNECTION_REFUSED' })), 'network', true]
+      ];
+      for (const [fetchImpl, code, retryable] of scenarios) {
+        h.setFetch(fetchImpl);
+        const result = await h.parse('新建事项');
+        assert.equal(result.ok, false, `${code} 应失败`);
+        assert.equal(result.code, code);
+        assert.equal(result.retryable, retryable);
+      }
+      assert.equal(JSON.stringify(settingsSnapshot(db)), settingsBefore);
+      assert.equal(h.itemsSnapshot(), itemsBefore);
+    });
+
+    test('F29.8 备份 / 恢复协议口径', async () => {
+      await withRealDatabase(async host => {
+        const { realDb, dataDir } = host;
+        h.fn('setSetting')('ai_endpoint', ANTHROPIC_ENDPOINT);
+        h.fn('setSetting')('ai_model', MODEL);
+        h.fn('setSetting')('ai_api_key', KEY);
+        h.fn('setSetting')('ai_protocol', 'anthropic');
+        seedLocalDatabase(host);
+        realDb.persist();
+
+        const localConfig = plain(h.fn('readAiConfig')());
+        const backupPath = path.join(dataDir, 'backup.zip');
+        const zipDir = path.join(dataDir, 'unzipped');
+        await h.fn('createBackupArchive')(backupPath);
+        fs.mkdirSync(zipDir, { recursive: true });
+        await extract(backupPath, { dir: zipDir });
+
+        const settings = await readSettingsFile(path.join(zipDir, 'deadline-desk.db'));
+        assert.equal(settings.ai_protocol, 'anthropic');
+        assert.equal(settings.ai_api_key, undefined);
+        assert.equal(fs.readFileSync(path.join(zipDir, 'deadline-desk.db')).includes(Buffer.from(KEY)), false, '备份数据库不应包含 Key 字节');
+        assert.deepEqual(plain(h.fn('readAiConfig')()), localConfig, '导出不应改动本机 AI 配置');
+      });
+
+      await withRealDatabase(async host => {
+        const { dataDir } = host;
+        h.fn('setSetting')('ai_api_key', KEY);
+        seedLocalDatabase(host);
+
+        const fixtureZip = path.join(dataDir, 'fixture.zip');
+        await createBackupFixture(fixtureZip, {
+          endpoint: BACKUP_ENDPOINT,
+          model: BACKUP_MODEL,
+          apiKey: BACKUP_KEY,
+          protocol: 'anthropic',
+          title: '备份事项'
+        });
+        await h.fn('restoreBackupArchive')(fixtureZip);
+
+        assert.deepEqual(plain(h.fn('readAiConfig')()), {
+          protocol: 'anthropic',
+          endpoint: BACKUP_ENDPOINT,
+          model: BACKUP_MODEL,
+          apiKey: KEY
+        });
+        const view = plain(h.fn('buildAiSettingsView')());
+        assert.equal(view.configured, true);
+        assert.equal(view.protocol, 'anthropic');
+        const dbFile = h.fn('getPaths')().database;
+        assert.equal(fs.readFileSync(dbFile).includes(Buffer.from(BACKUP_KEY)), false, '备份 Key 不应落盘');
+
+        const legacyZip = path.join(dataDir, 'legacy.zip');
+        await createBackupFixture(legacyZip, {
+          endpoint: BACKUP_ENDPOINT,
+          model: BACKUP_MODEL,
+          apiKey: BACKUP_KEY,
+          title: '旧备份事项'
+        });
+        await h.fn('restoreBackupArchive')(legacyZip);
+        assert.equal(plain(h.fn('readAiConfig')()).protocol, 'openai');
+      });
+    });
+
+    test('F29.9 callChatCompletion（anthropic）：system 收集边界与 messages 字段裁剪', async () => {
+      h.setFetch(() => Promise.resolve(anthropicEnvelope('ok')));
+      await h.fn('callChatCompletion')({
+        endpoint: ANTHROPIC_ENDPOINT,
+        apiKey: KEY,
+        model: MODEL,
+        messages: [
+          { role: 'system', content: { unexpected: true } },
+          { role: 'system', content: 'S1' },
+          { role: 'user', content: 'hi', extra: 'drop-me' }
+        ],
+        timeoutMs: 500,
+        protocol: 'anthropic'
+      });
+      const body = JSON.parse(h.fetchCalls[0].init.body);
+      assert.equal(body.system, 'S1', '非字符串 content 的 system 项不进入收集');
+      assert.deepEqual(body.messages, [{ role: 'user', content: 'hi' }], 'messages 元素仅复制 role/content');
+
+      h.fetchCalls.length = 0;
+      await h.fn('callChatCompletion')({
+        endpoint: ANTHROPIC_ENDPOINT,
+        apiKey: KEY,
+        model: MODEL,
+        messages: [{ role: 'system', content: { unexpected: true } }, { role: 'user', content: 'hi' }],
+        timeoutMs: 500,
+        protocol: 'anthropic'
+      });
+      const noValidSystem = JSON.parse(h.fetchCalls[0].init.body);
+      assert.deepEqual(Object.keys(noValidSystem).sort(), ['max_tokens', 'messages', 'model', 'temperature']);
+    });
+
+    test('F29.10 readChatText：截断先于空文本判定，缺省/非法协议按 openai', () => {
+      const read = h.fn('readChatText');
+      const truncatedEmpty = captureFailure(() => read(
+        { status: 200, ok: true, text: anthropicBody([], { stopReason: 'max_tokens' }) },
+        'anthropic'
+      ));
+      assert.equal(truncatedEmpty.code, 'invalid_response');
+      assert.equal(truncatedEmpty.retryable, true);
+
+      const byDefault = captureFailure(() => read({ status: 200, ok: true, text: anthropicBody('hello') }));
+      assert.equal(byDefault.code, 'invalid_response');
+      const byInvalid = captureFailure(() => read({ status: 200, ok: true, text: anthropicBody('hello') }, 'foo'));
+      assert.equal(byInvalid.code, 'invalid_response');
     });
   });
 

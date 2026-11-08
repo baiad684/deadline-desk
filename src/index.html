@@ -268,6 +268,10 @@
             <section class="settings-group panel" id="aiSettingsGroup">
               <header class="panel-header"><div><h2>AI 配置</h2><span>助手调用的在线模型</span></div></header>
               <div class="ai-settings-form">
+                <label class="field full"><span>接口协议</span><select id="aiProtocolSelect">
+                  <option value="openai">OpenAI 兼容</option>
+                  <option value="anthropic">Anthropic Messages API</option>
+                </select></label>
                 <label class="field full"><span>接口地址</span><input id="aiEndpointInput" type="url" placeholder="https://api.example.com/v1/chat/completions" autocomplete="off" spellcheck="false"></label>
                 <label class="field full"><span>模型名</span><input id="aiModelInput" type="text" maxlength="200" placeholder="例如：gpt-4o-mini" autocomplete="off" spellcheck="false"></label>
                 <div class="ai-key-row">
@@ -277,7 +281,7 @@
                 <label class="field full hidden" id="aiKeyField"><span>新的 API Key</span><input id="aiKeyInput" type="password" maxlength="4096" autocomplete="new-password" placeholder="输入新的 API Key；留空保存则保持现有 Key" aria-label="新的 API Key"></label>
               </div>
               <div class="ai-settings-status" id="aiSettingsStatus" data-ai-status="missing">配置不完整，助手功能不可用</div>
-              <div class="setting-note"><span data-icon="info"></span><p>使用助手时，当前输入、当前本地日期/星期/时刻与事项摘要（编号、标题、类型、截止时间、状态）会发送到你配置的第三方接口；事项说明、附件文件、日记与打卡数据不会发送。API Key 只保存在本机数据库，不随导出备份打包，恢复备份时保留本机 Key；界面只显示掩码。</p></div>
+              <div class="setting-note"><span data-icon="info"></span><p>使用助手时，当前输入、当前本地日期/星期/时刻与事项摘要（编号、标题、类型、截止时间、状态）会发送到你配置的第三方接口；事项说明、附件文件、日记与打卡数据不会发送。接口协议、接口地址与模型名随导出备份保存；API Key 只保存在本机数据库，不随导出备份打包，恢复备份时保留本机 Key；界面只显示掩码。</p></div>
               <div class="ai-settings-actions"><button type="button" class="primary-button" id="aiSettingsSave"><span data-icon="check"></span>保存 AI 配置</button></div>
             </section>
             <section class="settings-group panel">

@@ -75,7 +75,7 @@ const state = {
     dirty: false,
     error: null
   },
-  ai: { configured: false, endpoint: '', model: '', keyMask: '', editingKey: false }
+  ai: { configured: false, protocol: 'openai', endpoint: '', model: '', keyMask: '', editingKey: false }
 };
 
 const api = window.deadlineDesk;
@@ -844,6 +844,10 @@ function switchPage(page) {
 
 // ---------- 助手 ----------
 
+function normalizeAiProtocol(value) {
+  return value === 'anthropic' ? 'anthropic' : 'openai';
+}
+
 async function refreshAssistantConfig() {
   let settings;
   try {
@@ -856,6 +860,7 @@ async function refreshAssistantConfig() {
     ...state.ai,
     ...settings.ai,
     configured: Boolean(settings.ai.configured),
+    protocol: normalizeAiProtocol(settings.ai.protocol),
     endpoint: typeof settings.ai.endpoint === 'string' ? settings.ai.endpoint : '',
     model: typeof settings.ai.model === 'string' ? settings.ai.model : '',
     keyMask: typeof settings.ai.keyMask === 'string' ? settings.ai.keyMask : '',
@@ -2104,6 +2109,7 @@ async function handleItemAction(button) {
 }
 
 function renderAiSettings() {
+  $('#aiProtocolSelect').value = normalizeAiProtocol(state.ai.protocol);
   $('#aiEndpointInput').value = state.ai.endpoint || '';
   $('#aiModelInput').value = state.ai.model || '';
   $('#aiKeyMask').textContent = state.ai.keyMask ? `已保存（${state.ai.keyMask}）` : '未设置';
@@ -2119,7 +2125,8 @@ async function saveAiSettings() {
   const endpoint = $('#aiEndpointInput').value.trim();
   const model = $('#aiModelInput').value.trim();
   const apiKey = state.ai.editingKey ? $('#aiKeyInput').value.trim() : '';
-  const payload = { endpoint, model };
+  const protocol = normalizeAiProtocol($('#aiProtocolSelect').value);
+  const payload = { endpoint, model, protocol };
   if (apiKey) payload.apiKey = apiKey;
   let result;
   try {
@@ -2147,8 +2154,8 @@ async function initializeSettings() {
   $('#dataPath').textContent = settings.dataPath;
   $('#notificationSummary').textContent = settings.notificationsEnabled ? '应用在托盘运行时会检查到期事项。' : '系统通知当前已关闭。';
   state.ai = settings.ai
-    ? { ...settings.ai, editingKey: false }
-    : { configured: false, endpoint: '', model: '', keyMask: '', editingKey: false };
+    ? { ...settings.ai, protocol: normalizeAiProtocol(settings.ai.protocol), editingKey: false }
+    : { configured: false, protocol: 'openai', endpoint: '', model: '', keyMask: '', editingKey: false };
   renderAiSettings();
   if (state.currentPage === 'assistant') renderAssistantConfigWarning();
 }
