@@ -47,9 +47,17 @@
   --slate: #4c6376;
   --slate-soft: #e9f0f4;
 
-  --radius-lg: 10px;
-  --radius-md: 7px;
-  --radius: 5px;
+  /* UI 重设计阶段 1：统一间距刻度（4 的倍数），后续阶段的新样式只用这几档 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --radius-lg: 12px;
+  --radius-md: 8px;
+  --radius: 6px;
 
   --shadow-panel: 0 1px 2px rgba(20, 36, 32, .05), 0 10px 30px -18px rgba(20, 36, 32, .18);
   --shadow-pop: 0 1px 3px rgba(20, 36, 32, .1), 0 4px 14px -6px rgba(20, 36, 32, .16);
@@ -116,7 +124,7 @@ kbd { padding: 2px 5px; border: 1px solid var(--line-300); border-bottom-width: 
 .primary-button, .secondary-button, .danger-button, .text-button { height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border-radius: var(--radius-md); padding: 0 13px; font-weight: 600; white-space: nowrap; }
 .primary-button, .secondary-button, .danger-button { transition: background-color .15s var(--ease), border-color .15s var(--ease), color .15s var(--ease), transform .12s var(--ease), box-shadow .15s var(--ease); }
 .primary-button { border: 1px solid var(--primary); color: #fff; background: var(--primary); box-shadow: 0 1px 2px rgba(10, 60, 52, .3); }
-.primary-button:hover { background: var(--primary-hover); border-color: var(--primary-hover); transform: translateY(-1px); box-shadow: 0 5px 12px rgba(10, 60, 52, .22); }
+.primary-button:hover { background: var(--primary-hover); border-color: var(--primary-hover); box-shadow: 0 2px 6px rgba(10, 60, 52, .22); }
 .primary-button:active { transform: translateY(1px); box-shadow: none; }
 .secondary-button { border: 1px solid var(--line-300); color: var(--ink-900); background: var(--surface); }
 .secondary-button:hover { border-color: var(--line-400); background: var(--surface-2); }
@@ -143,16 +151,14 @@ kbd { padding: 2px 5px; border: 1px solid var(--line-300); border-bottom-width: 
 .today-layout { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(220px, .85fr); gap: 16px; }
 .deadline-panel { min-width: 0; }
 .deadline-list { padding: 4px 12px; }
-.deadline-row { position: relative; display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; gap: 11px; align-items: center; min-height: 70px; margin: 2px 0; padding: 12px 6px; border: 1px solid transparent; border-bottom-color: var(--line-100); border-radius: var(--radius-md); transition: background-color .2s var(--ease), border-color .2s var(--ease), box-shadow .2s var(--ease), transform .2s var(--ease); }
+.deadline-row { position: relative; display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; gap: 11px; align-items: center; min-height: 70px; margin: 2px 0; padding: 12px 6px; border: 1px solid transparent; border-bottom-color: var(--line-100); border-radius: var(--radius-md); transition: background-color .2s var(--ease), border-color .2s var(--ease); }
 .deadline-list.entering .deadline-row { animation: deadline-row-in .38s var(--ease) backwards; animation-delay: var(--row-delay, 0ms); }
 .deadline-row:last-child { border-bottom: 0; }
-.deadline-row:hover { border-color: var(--line-200); background: var(--surface-2); box-shadow: 0 8px 18px rgba(20, 36, 32, .06); transform: translateX(2px); }
+.deadline-row:hover { border-color: var(--line-200); background: var(--surface-2); }
 .deadline-row:has(.badge.danger) { border-left: 3px solid var(--danger); padding-left: 3px; background: #fdf5f3; }
 .deadline-row:has(.badge.warning) { border-left: 3px solid #c78a2f; padding-left: 3px; background: #fffaf0; }
 .deadline-row:has(.badge.danger):hover { background: #fbece8; }
 .deadline-row:has(.badge.warning):hover { background: #fff3d9; }
-.deadline-row .date-box { transition: transform .2s var(--ease-spring), box-shadow .2s var(--ease); }
-.deadline-row:hover .date-box { transform: translateY(-2px); box-shadow: 0 5px 10px rgba(20, 36, 32, .08); }
 .date-box { width: 38px; height: 42px; display: grid; place-content: center; border: 1px solid var(--line-200); border-radius: var(--radius-md); color: var(--ink-500); text-align: center; font-size: 11px; line-height: 1.1; }
 .date-box strong { color: var(--ink-900); font-size: 17px; font-weight: 650; }
 .date-box.overdue { border-color: #e5b8b0; color: var(--danger); background: var(--danger-soft); }
@@ -189,7 +195,7 @@ kbd { padding: 2px 5px; border: 1px solid var(--line-300); border-bottom-width: 
 .week-day { min-width: 0; min-height: 57px; display: grid; place-content: center; padding: 7px 2px; border: 0; border-radius: var(--radius-md); color: var(--ink-500); background: transparent; text-align: center; font-size: 11px; transition: background-color .14s var(--ease), transform .14s var(--ease); }
 .week-day strong { display: block; margin-top: 4px; color: var(--ink-700); font-size: 14px; font-weight: 650; }
 .week-day.has-item { cursor: pointer; }
-.week-day.has-item:hover { background: var(--danger-soft); transform: translateY(-2px); }
+.week-day.has-item:hover { background: var(--danger-soft); }
 .week-day.today { color: #cdeee7; background: var(--primary); }
 .week-day.today:hover { background: var(--primary-hover); }
 .week-day.has-item strong { color: var(--danger); }
@@ -264,7 +270,7 @@ kbd { padding: 2px 5px; border: 1px solid var(--line-300); border-bottom-width: 
 .overview-panel { grid-column: 1 / -1; }
 .risk-list { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 15px; }
 .risk-item { min-width: 0; padding: 13px; border: 1px solid var(--line-200); border-left: 3px solid var(--primary); border-radius: var(--radius-md); transition: transform .14s var(--ease), box-shadow .14s var(--ease); }
-.risk-item:hover { transform: translateY(-1px); box-shadow: var(--shadow-pop); }
+.risk-item:hover { box-shadow: var(--shadow-pop); }
 .risk-item.danger { border-left-color: var(--danger); background: #fdf7f5; }
 .risk-item.danger strong { color: var(--danger); }
 .risk-item.warning { border-left-color: #c07c26; }
