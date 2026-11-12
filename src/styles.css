@@ -166,9 +166,21 @@ kbd { padding: 2px 5px; border: 1px solid var(--line-300); border-bottom-width: 
 .panel-header { min-height: 55px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 17px; border-bottom: 1px solid var(--line-100); }
 .panel-header h2 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
 .panel-header span { display: block; margin-top: 3px; color: var(--ink-400); font-size: 12px; letter-spacing: .02em; }
+.today-kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); margin-bottom: var(--space-4); }
+.kpi { display: grid; gap: var(--space-1); padding: var(--space-4) var(--space-5); border: 1px solid var(--line-200); border-radius: var(--radius-lg); color: var(--ink-900); background: var(--surface); box-shadow: var(--shadow-panel); text-align: left; }
+.kpi span { color: var(--ink-500); font-size: 12px; font-weight: 600; }
+.kpi strong { font-family: var(--font-display); font-size: 28px; font-weight: 650; line-height: 1.1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.kpi-overdue { cursor: pointer; transition: border-color .15s var(--ease), background-color .15s var(--ease); }
+.kpi-overdue:hover { border-color: var(--line-400); background: var(--surface-2); }
+.kpi-overdue.has-overdue { border-color: #e5b8b0; background: var(--danger-soft); }
+.kpi-overdue.has-overdue strong, .kpi-overdue.has-overdue span { color: var(--danger); }
+.overdue-alert { width: 100%; display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-4); padding: var(--space-3) var(--space-4); border: 1px solid #e5b8b0; border-radius: var(--radius-md); color: var(--danger); background: var(--danger-soft); text-align: left; font-weight: 600; transition: background-color .15s var(--ease); }
+.overdue-alert:hover { background: #f6ddd8; }
 .today-layout { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(220px, .85fr); gap: 16px; }
 .deadline-panel { min-width: 0; }
 .deadline-list { padding: 4px 12px; }
+.deadline-group { padding: var(--space-4) var(--space-2) var(--space-2); color: var(--ink-500); font-size: 12px; font-weight: 650; letter-spacing: .04em; }
+.deadline-group:first-child { padding-top: var(--space-3); }
 .deadline-row { position: relative; display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; gap: 11px; align-items: center; min-height: 70px; margin: 2px 0; padding: 12px 6px; border: 1px solid transparent; border-bottom-color: var(--line-100); border-radius: var(--radius-md); transition: background-color .2s var(--ease), border-color .2s var(--ease); }
 .deadline-list.entering .deadline-row { animation: deadline-row-in .38s var(--ease) backwards; animation-delay: var(--row-delay, 0ms); }
 .deadline-row:last-child { border-bottom: 0; }
@@ -218,6 +230,8 @@ kbd { padding: 2px 5px; border: 1px solid var(--line-300); border-bottom-width: 
 .week-day.today:hover { background: var(--primary-hover); }
 .week-day.has-item strong { color: var(--danger); }
 .week-day.today strong { color: #fff; }
+.notice-line { display: flex; align-items: center; gap: var(--space-2); margin: 0; padding: 0 var(--space-1); color: var(--ink-500); font-size: 12px; line-height: 1.55; }
+.notice-line .icon { width: 14px; height: 14px; color: var(--ink-400); }
 .tip-panel { display: flex; align-items: flex-start; gap: 10px; padding: 13px 14px; border: 1px solid var(--primary-100); border-radius: var(--radius-lg); color: var(--primary-hover); background: var(--primary-soft); }
 .tip-panel strong { display: block; font-size: 12px; }
 .tip-panel p { margin: 4px 0 0; color: var(--ink-600); font-size: 12px; line-height: 1.55; }

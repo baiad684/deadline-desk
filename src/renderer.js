@@ -305,6 +305,13 @@ function statusButton(item) {
   return `<button class="status-button ${completed ? 'completed' : ''} ${justCompleted ? 'just-completed' : ''}" data-action="status" data-id="${item.id}" title="切换状态" aria-label="将“${escapeHtml(item.title)}”标记为${escapeHtml(nextStatusLabel(item))}"><span class="status-ring">${completed ? `<svg class="icon sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m5 12 4 4L19 6"/></svg>` : ''}</span><span>${escapeHtml(statusLabel(item))}</span></button>`;
 }
 
+// 临近截止的分组标题：今天 / 明天 / 周X · M月D日
+function dayGroupLabel(date, days) {
+  if (days === 0) return '今天';
+  if (days === 1) return '明天';
+  return `周${'日一二三四五六'.charAt(date.getDay())} · ${date.getMonth() + 1}月${date.getDate()}日`;
+}
+
 function renderToday() {
   const actionable = sorted(state.items.filter(item => {
     const days = daysUntil(item.deadline);
@@ -320,12 +327,16 @@ function renderToday() {
   if (!actionable.length) {
     list.innerHTML = emptyState(state.items.length ? '暂无到期事项' : '从第一条截止日期开始', state.items.length ? '可以放心推进手头的事情。' : '添加大作业或活动，截止线会帮你集中追踪。', '新增事项', 'assignment');
   } else {
+    let lastGroup = '';
     list.innerHTML = actionable.map(item => {
       const date = parseDate(item.deadline);
       const days = daysUntil(item.deadline);
+      const group = dayGroupLabel(date, days);
+      const header = group === lastGroup ? '' : `<div class="deadline-group">${group}</div>`;
+      lastGroup = group;
       const badgeClass = days <= 1 ? 'warning' : 'progress';
       const typeBadge = item.kind === 'assignment' ? `<span class="badge ${item.work_type === 'team' ? 'team' : 'personal'}">${item.work_type === 'team' ? '团队' : '个人'}</span>` : '<span class="badge progress">活动</span>';
-      return `<article class="deadline-row">
+      return `${header}<article class="deadline-row">
         <div class="date-box"><strong>${date.getDate()}</strong>${date.getMonth() + 1}月</div>
         <div class="row-copy"><div class="row-title"><strong>${escapeHtml(item.title)}</strong>${typeBadge}<span class="badge ${badgeClass}">${escapeHtml(timingLabel(item))}</span></div><div class="row-sub">${escapeHtml(item.description || `${kindLabel(item)} · 暂无补充说明`)}</div></div>
         <div class="row-actions">${statusButton(item)}<button class="icon-button" data-action="edit" data-id="${item.id}" title="编辑" aria-label="编辑“${escapeHtml(item.title)}”"><span data-icon="edit"></span></button><button class="icon-button" data-action="delete" data-id="${item.id}" title="删除" aria-label="删除“${escapeHtml(item.title)}”"><span data-icon="trash"></span></button></div>
@@ -335,15 +346,22 @@ function renderToday() {
     list.querySelectorAll('.deadline-row').forEach((row, index) => row.style.setProperty('--row-delay', `${Math.min(index * 45, 200)}ms`));
   }
 
-  const pending = state.items.filter(isPending).length;
-  const progress = state.items.filter(item => item.status === 'in_progress').length;
-  const now = new Date();
-  const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7));
-  const weekDone = state.items.filter(item => isCompleted(item) && new Date(`${item.updated_at.replace(' ', 'T')}Z`) >= weekStart).length;
-  $('#pendingMetric').innerHTML = `${pending}<small>项</small>`;
-  $('#progressMetric').innerHTML = `${progress}<small>项</small>`;
-  $('#weekDoneMetric').innerHTML = `${weekDone}<small>项</small>`;
+  renderTodayOverview();
   renderWeekStrip();
+}
+
+// 今天页顶部概览：三个数字沿用导航角标的口径，不受搜索框过滤；有逾期时同步显示提醒条
+function renderTodayOverview() {
+  const upcoming = state.items.filter(item => isPending(item) && !isOverdue(item) && daysUntil(item.deadline) >= 0 && daysUntil(item.deadline) <= 7);
+  const dueToday = upcoming.filter(item => daysUntil(item.deadline) === 0).length;
+  const overdueTotal = state.items.filter(isOverdue).length;
+  $('#kpiToday').textContent = dueToday;
+  $('#kpiWeek').textContent = upcoming.length;
+  $('#kpiOverdueCount').textContent = overdueTotal;
+  $('#kpiOverdue').classList.toggle('has-overdue', overdueTotal > 0);
+  const alert = $('#overdueAlert');
+  alert.classList.toggle('hidden', overdueTotal === 0);
+  alert.textContent = overdueTotal ? `有 ${overdueTotal} 项已逾期，点击去处理` : '';
 }
 
 function renderWeekStrip() {
@@ -2327,6 +2345,7 @@ function bindEvents() {
   });
 
   $('#showAllButton').addEventListener('click', openAllUpcoming);
+  $$('[data-goto]').forEach(button => button.addEventListener('click', () => switchPage(button.dataset.goto)));
   $('#notificationButton').addEventListener('click', () => { switchPage('settings'); showToast(state.notificationsEnabled ? '系统通知已开启' : '系统通知已关闭'); });
   $('#notificationToggle').addEventListener('change', async event => {
     const enabled = await execute(() => api.settings.setNotifications(event.target.checked), event.target.checked ? '系统通知已开启' : '系统通知已关闭');

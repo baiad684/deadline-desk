@@ -61,6 +61,12 @@
             <div><h1>今天要处理</h1><p id="todaySubtitle">正在读取本地数据...</p></div>
             <div class="today-date"><strong id="currentDate"></strong><span id="currentWeekday"></span></div>
           </div>
+          <div class="today-kpis" id="todayKpis">
+            <div class="kpi"><span>今天到期</span><strong id="kpiToday">0</strong></div>
+            <div class="kpi"><span>7 天内</span><strong id="kpiWeek">0</strong></div>
+            <button type="button" class="kpi kpi-overdue" id="kpiOverdue" data-goto="overdue"><span>已逾期</span><strong id="kpiOverdueCount">0</strong></button>
+          </div>
+          <button type="button" class="overdue-alert hidden" id="overdueAlert" data-goto="overdue"></button>
           <div class="today-layout">
             <section class="panel deadline-panel">
               <header class="panel-header"><div><h2>临近截止</h2><span>今天及未来 7 天</span></div><button class="text-button" id="showAllButton">查看全部</button></header>
@@ -72,18 +78,10 @@
                 <div class="habit-card-list" id="habitCardList"></div>
               </section>
               <section class="panel">
-                <header class="panel-header"><div><h2>本周概览</h2><span>实时统计</span></div></header>
-                <div class="metric-grid">
-                  <div class="metric"><span>待完成</span><strong id="pendingMetric">0<small>项</small></strong></div>
-                  <div class="metric"><span>进行中</span><strong id="progressMetric">0<small>项</small></strong></div>
-                  <div class="metric"><span>本周完成</span><strong id="weekDoneMetric">0<small>项</small></strong></div>
-                </div>
-              </section>
-              <section class="panel">
                 <header class="panel-header"><div><h2>未来 7 天</h2><span>截止分布</span></div></header>
                 <div class="week-strip" id="weekStrip"></div>
               </section>
-              <section class="tip-panel"><span data-icon="bell"></span><div><strong>系统提醒</strong><p id="notificationSummary">应用在托盘运行时会检查到期事项。</p></div></section>
+              <p class="notice-line"><span data-icon="bell"></span><span id="notificationSummary">应用在托盘运行时会检查到期事项。</span></p>
             </aside>
           </div>
         </section>
