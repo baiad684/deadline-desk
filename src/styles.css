@@ -486,7 +486,21 @@ kbd { padding: 2px 5px; border: 1px solid var(--line-300); border-bottom-width: 
 .deadline-control:focus-within .deadline-glyph { color: var(--primary-hover); }
 .deadline-control input { width: auto; flex: 1; height: auto; padding: 0; border: 0; border-radius: 0; outline: none; color: var(--ink-900); background: transparent; font-variant-numeric: tabular-nums; }
 .deadline-control input:focus { border-color: transparent; box-shadow: none; }
-.deadline-control input[type="time"] { flex: 0 0 auto; }
+.deadline-control #itemDeadlineTime { flex: 0 0 auto; width: 58px; text-align: center; font-weight: 600; }
+.time-toggle { width: 28px; height: 28px; display: grid; place-items: center; flex: 0 0 auto; margin-right: -6px; padding: 0; border: 0; border-radius: var(--radius); color: var(--ink-500); background: transparent; transition: color .15s var(--ease), background-color .15s var(--ease); }
+.time-toggle:hover, .time-toggle[aria-expanded="true"] { color: var(--primary-hover); background: var(--primary-soft); }
+.time-panel { display: grid; gap: var(--space-3); margin-top: var(--space-3); padding: var(--space-3); border: 1px solid var(--line-200); border-radius: var(--radius-lg); background: var(--surface-2); }
+.time-panel-title { margin-bottom: var(--space-2); color: var(--ink-500); font-size: 11px; font-weight: 600; letter-spacing: .04em; }
+.time-grid { display: grid; gap: 4px; }
+.time-grid.hours { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+.time-grid.minutes { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.time-cell { height: 30px; padding: 0; border: 1px solid transparent; border-radius: var(--radius); color: var(--ink-700); background: var(--surface); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; transition: color .14s var(--ease), background-color .14s var(--ease), border-color .14s var(--ease); }
+.time-cell:hover { border-color: var(--line-300); }
+.time-cell.active { color: #fff; border-color: var(--primary); background: var(--primary); }
+.time-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.time-presets button { min-height: 28px; padding: 0 var(--space-3); border: 1px solid var(--line-300); border-radius: 999px; color: var(--ink-600); background: var(--surface); font-size: 12px; font-weight: 600; transition: color .14s var(--ease), background-color .14s var(--ease), border-color .14s var(--ease); }
+.time-presets button:hover { border-color: var(--line-400); color: var(--ink-900); }
+.time-presets button.active { color: var(--primary-hover); border-color: var(--primary-300); background: var(--primary-soft); }
 .deadline-control input::-webkit-calendar-picker-indicator { opacity: .45; cursor: pointer; transition: opacity .15s var(--ease); }
 .deadline-control input::-webkit-calendar-picker-indicator:hover { opacity: .9; }
 .deadline-sep { width: 1px; height: 20px; background: var(--line-200); }

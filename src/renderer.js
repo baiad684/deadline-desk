@@ -21,6 +21,7 @@ const icons = {
   left: '<path d="m15 18-6-6 6-6"/>',
   right: '<path d="m9 18 6-6-6-6"/>',
   down: '<path d="m6 9 6 6 6-6"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   diary: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 3v18"/><path d="M12 8h5M12 12h5"/>',
   repeat: '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
   folder: '<path d="M3 5h6l2 2h10v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
@@ -2000,6 +2001,41 @@ function setModalKind(kind) {
   if ([...status.options].some(option => option.value === current)) status.value = current;
 }
 
+// ---------- 自绘时刻选择器 ----------
+// 原生 time 控件的弹层样式无法定制，改用文本框 + 展开面板；#itemDeadlineTime 的 id 与取值格式（HH:MM）保持不变
+function normalizeTimeText(text) {
+  const match = String(text).trim().match(/^(\d{1,2})[:：]?(\d{2})$/);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour > 23 || minute > 59) return null;
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+function renderTimePanel() {
+  const current = normalizeTimeText($('#itemDeadlineTime').value);
+  const [hour, minute] = current ? current.split(':') : ['', ''];
+  const cells = (values, active, kind) => values.map(value => {
+    const text = String(value).padStart(2, '0');
+    return `<button type="button" class="time-cell${text === active ? ' active' : ''}" data-time-${kind}="${text}">${text}</button>`;
+  }).join('');
+  $('#timeHours').innerHTML = cells(Array.from({ length: 24 }, (_, index) => index), hour, 'hour');
+  $('#timeMinutes').innerHTML = cells(Array.from({ length: 12 }, (_, index) => index * 5), minute, 'minute');
+  $$('#timePresets button').forEach(button => button.classList.toggle('active', button.dataset.time === current));
+}
+
+function setTimePanelOpen(open) {
+  $('#timePanel').classList.toggle('hidden', !open);
+  $('#timeToggle').setAttribute('aria-expanded', String(open));
+  if (open) renderTimePanel();
+}
+
+function setDeadlineTime(value) {
+  $('#itemDeadlineTime').value = value;
+  updateDeadlineAux();
+  renderTimePanel();
+}
+
 function updateDeadlineAux() {
   const dateValue = $('#itemDeadlineDate').value;
   $$('#deadlineChips button').forEach(button => {
@@ -2030,6 +2066,7 @@ function openItemModal(kind = 'assignment', item = null) {
   const [deadlineDate, deadlineTime = '23:59'] = (item ? item.deadline : `${localDate()} 23:59`).split(' ');
   $('#itemDeadlineDate').value = deadlineDate;
   $('#itemDeadlineTime').value = deadlineTime;
+  setTimePanelOpen(false);
   updateDeadlineAux();
   if (item?.work_type) $('#itemWorkType').value = item.work_type;
   $('#itemStatus').value = item?.status || (state.modalKind === 'assignment' ? 'not_started' : 'not_completed');
@@ -2097,7 +2134,7 @@ async function saveItem(event) {
     kind: state.modalKind,
     title: $('#itemTitle').value,
     description: $('#itemDescription').value,
-    deadline: `${$('#itemDeadlineDate').value} ${$('#itemDeadlineTime').value || '23:59'}`,
+    deadline: `${$('#itemDeadlineDate').value} ${normalizeTimeText($('#itemDeadlineTime').value) || '23:59'}`,
     status: $('#itemStatus').value,
     workType: state.modalKind === 'assignment' ? $('#itemWorkType').value : null
   };
@@ -2232,7 +2269,31 @@ function bindEvents() {
     updateDeadlineAux();
   });
   $('#itemDeadlineDate').addEventListener('input', updateDeadlineAux);
-  $('#itemDeadlineTime').addEventListener('input', updateDeadlineAux);
+  $('#itemDeadlineTime').addEventListener('input', () => { updateDeadlineAux(); if (!$('#timePanel').classList.contains('hidden')) renderTimePanel(); });
+  $('#itemDeadlineTime').addEventListener('change', event => {
+    const raw = event.target.value.trim();
+    if (!raw) { renderTimePanel(); return; }
+    const normalized = normalizeTimeText(raw);
+    if (normalized) setDeadlineTime(normalized);
+    else { setDeadlineTime(''); showToast('时刻格式应为 HH:MM，已按 23:59 处理', true); }
+  });
+  $('#timeToggle').addEventListener('click', () => setTimePanelOpen($('#timePanel').classList.contains('hidden')));
+  $('#timeHours').addEventListener('click', event => {
+    const cell = event.target.closest('[data-time-hour]');
+    if (!cell) return;
+    const minute = (normalizeTimeText($('#itemDeadlineTime').value) || '09:00').split(':')[1];
+    setDeadlineTime(`${cell.dataset.timeHour}:${minute}`);
+  });
+  $('#timeMinutes').addEventListener('click', event => {
+    const cell = event.target.closest('[data-time-minute]');
+    if (!cell) return;
+    const hour = (normalizeTimeText($('#itemDeadlineTime').value) || '09:00').split(':')[0];
+    setDeadlineTime(`${hour}:${cell.dataset.timeMinute}`);
+  });
+  $('#timePresets').addEventListener('click', event => {
+    const preset = event.target.closest('[data-time]');
+    if (preset) setDeadlineTime(preset.dataset.time);
+  });
   $$('.modal-close').forEach(button => button.addEventListener('click', closeItemModal));
   $('#itemModal').addEventListener('click', event => { if (event.target === $('#itemModal')) closeItemModal(); });
   $('#itemForm').addEventListener('submit', saveItem);

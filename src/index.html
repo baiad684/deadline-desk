@@ -325,7 +325,18 @@
               <span class="deadline-glyph" data-icon="calendar"></span>
               <input id="itemDeadlineDate" type="date" required aria-label="截止日期">
               <span class="deadline-sep" aria-hidden="true"></span>
-              <input id="itemDeadlineTime" type="time" aria-label="截止时刻，留空按 23:59 处理">
+              <input id="itemDeadlineTime" type="text" inputmode="numeric" maxlength="5" placeholder="23:59" autocomplete="off" aria-label="截止时刻，留空按 23:59 处理"><button type="button" class="time-toggle" id="timeToggle" aria-expanded="false" aria-controls="timePanel" title="选择时刻" aria-label="选择时刻"><span data-icon="clock"></span></button>
+            </div>
+            <div class="time-panel hidden" id="timePanel">
+              <div><div class="time-panel-title">时</div><div class="time-grid hours" id="timeHours"></div></div>
+              <div><div class="time-panel-title">分</div><div class="time-grid minutes" id="timeMinutes"></div></div>
+              <div class="time-presets" id="timePresets">
+                <button type="button" data-time="09:00">上午 9 点</button>
+                <button type="button" data-time="12:00">中午 12 点</button>
+                <button type="button" data-time="14:00">下午 14 点</button>
+                <button type="button" data-time="18:00">晚上 18 点</button>
+                <button type="button" data-time="23:59">当天截止</button>
+              </div>
             </div>
             <div class="deadline-aux">
               <div class="deadline-chips" id="deadlineChips">
