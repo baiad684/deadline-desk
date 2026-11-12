@@ -501,13 +501,23 @@ function renderAssignments() {
     list.innerHTML = `<div class="table-empty">${emptyState('还没有符合条件的大作业', state.search || state.assignmentFilter !== 'all' ? '调整搜索或筛选条件后再试。' : '添加课程任务并记录它的截止日期。', state.search || state.assignmentFilter !== 'all' ? '' : '新增大作业', 'assignment')}</div>`;
     return;
   }
-  list.innerHTML = items.map(item => `<article class="table-row ${isCompleted(item) ? 'completed' : ''}">
-    <div class="table-title"><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.description || (item.attachments.length ? `${item.attachments.length} 个附件` : '暂无要求说明'))}</span></div>
-    <div><span class="badge ${item.work_type === 'team' ? 'team' : 'personal'}">${item.work_type === 'team' ? '团队' : '个人'}</span></div>
-    <div class="deadline-cell"><strong>${formatDate(item.deadline)}</strong><span>${timingLabel(item)}</span></div>
-    <div><span class="badge ${statusClass(item)}">${statusLabel(item)}</span></div>
+  list.innerHTML = items.map(item => itemRowHtml(item)).join('');
+}
+
+// 大作业 / 活动 / 已逾期三个列表共用的行模板：状态按钮 | 标题 + 类型徽标 + 说明 | 截止时间 | 悬停操作
+function itemRowHtml(item, { overdue = false } = {}) {
+  const typeBadge = item.kind === 'assignment'
+    ? `<span class="badge ${item.work_type === 'team' ? 'team' : 'personal'}">${item.work_type === 'team' ? '团队' : '个人'}</span>`
+    : '<span class="badge progress">活动</span>';
+  const fallback = item.kind === 'assignment'
+    ? (item.attachments.length ? `${item.attachments.length} 个附件` : '暂无要求说明')
+    : '暂无补充说明';
+  return `<article class="table-row item-row ${isCompleted(item) ? 'completed' : ''} ${overdue ? 'is-overdue' : ''}">
+    <div class="item-status">${statusButton(item)}</div>
+    <div class="table-title"><div class="row-title"><strong>${escapeHtml(item.title)}</strong>${typeBadge}</div><span>${escapeHtml(item.description || fallback)}</span></div>
+    <div class="deadline-cell ${overdue ? 'overdue' : ''}"><strong>${formatDate(item.deadline)}</strong><span>${timingLabel(item)}</span></div>
     <div class="table-actions"><button class="icon-button" data-action="edit" data-id="${item.id}" title="编辑" aria-label="编辑“${escapeHtml(item.title)}”"><span data-icon="edit"></span></button><button class="icon-button" data-action="delete" data-id="${item.id}" title="删除" aria-label="删除“${escapeHtml(item.title)}”"><span data-icon="trash"></span></button></div>
-  </article>`).join('');
+  </article>`;
 }
 
 function renderActivities() {
@@ -520,12 +530,7 @@ function renderActivities() {
     list.innerHTML = `<div class="table-empty">${emptyState('还没有符合条件的活动', state.search || state.activityFilter !== 'all' ? '调整搜索或筛选条件后再试。' : '记录已经决定参加的活动。', state.search || state.activityFilter !== 'all' ? '' : '新增活动', 'activity')}</div>`;
     return;
   }
-  list.innerHTML = items.map(item => `<article class="table-row activity ${isCompleted(item) ? 'completed' : ''}">
-    <div class="table-title"><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.description || '暂无补充说明')}</span></div>
-    <div class="deadline-cell"><strong>${formatDate(item.deadline)}</strong><span>${timingLabel(item)}</span></div>
-    <div>${statusButton(item)}</div>
-    <div class="table-actions"><button class="icon-button" data-action="edit" data-id="${item.id}" title="编辑" aria-label="编辑“${escapeHtml(item.title)}”"><span data-icon="edit"></span></button><button class="icon-button" data-action="delete" data-id="${item.id}" title="删除" aria-label="删除“${escapeHtml(item.title)}”"><span data-icon="trash"></span></button></div>
-  </article>`).join('');
+  list.innerHTML = items.map(item => itemRowHtml(item)).join('');
 }
 
 function renderOverdue() {
@@ -536,15 +541,7 @@ function renderOverdue() {
     list.innerHTML = `<div class="table-empty">${emptyState('太棒了，没有逾期事项', '超过截止时刻还未完成的事项会集中出现在这里。')}</div>`;
     return;
   }
-  list.innerHTML = items.map(item => {
-    const typeBadge = item.kind === 'assignment' ? `<span class="badge ${item.work_type === 'team' ? 'team' : 'personal'}">${item.work_type === 'team' ? '团队' : '个人'}</span>` : '<span class="badge progress">活动</span>';
-    return `<article class="table-row overdue">
-    <div class="table-title"><div class="row-title"><strong>${escapeHtml(item.title)}</strong>${typeBadge}</div><span>${escapeHtml(item.description || '暂无补充说明')}</span></div>
-    <div class="deadline-cell overdue"><strong>${formatDate(item.deadline)}</strong><span>${timingLabel(item)}</span></div>
-    <div>${statusButton(item)}</div>
-    <div class="table-actions"><button class="icon-button" data-action="edit" data-id="${item.id}" title="编辑" aria-label="编辑“${escapeHtml(item.title)}”"><span data-icon="edit"></span></button><button class="icon-button" data-action="delete" data-id="${item.id}" title="删除" aria-label="删除“${escapeHtml(item.title)}”"><span data-icon="trash"></span></button></div>
-  </article>`;
-  }).join('');
+  list.innerHTML = items.map(item => itemRowHtml(item, { overdue: true })).join('');
 }
 
 function renderStats() {

@@ -271,6 +271,11 @@ kbd { padding: 2px 5px; border: 1px solid var(--line-300); border-bottom-width: 
 .table-actions { display: flex; justify-content: flex-end; gap: 5px; }
 .table-actions .icon-button { width: 31px; height: 31px; }
 .table-empty { min-height: 260px; }
+.table-head.item-head, .table-row.item-row { grid-template-columns: 112px minmax(0, 1fr) 150px 76px; }
+.item-row .item-status { min-width: 0; }
+.item-row .table-actions { opacity: 0; transition: opacity .14s var(--ease); }
+.item-row:hover .table-actions, .item-row:focus-within .table-actions { opacity: 1; }
+.item-row.is-overdue { box-shadow: inset 3px 0 0 var(--danger); }
 
 .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .stats-panel { min-width: 0; }
@@ -621,9 +626,7 @@ kbd { padding: 2px 5px; border: 1px solid var(--line-300); border-bottom-width: 
   .table-head, .table-row { grid-template-columns: minmax(240px, 1fr) 105px 115px 76px; }
   .table-head.activity, .table-row.activity,
   .table-head.overdue, .table-row.overdue { grid-template-columns: minmax(240px, 1fr) 105px 115px 76px; }
-  /* 仅五列的大作业表在窄窗口下隐藏「类型」列；活动表和逾期表保持四列完整展示 */
-  .table-head:not(.activity):not(.overdue) > span:nth-child(2),
-  .table-row:not(.activity):not(.overdue) > :nth-child(2) { display: none; }
+  .table-head.item-head, .table-row.item-row { grid-template-columns: 104px minmax(0, 1fr) 115px 76px; }
 }
 
 /* ---------- 助手 ---------- */
