@@ -646,7 +646,7 @@ async function pollAssistant(predicate, timeoutMs = 5000, intervalMs = 50) {
 
 async function resetAssistant(page, expected = 'ready') {
   await page.click('.nav-item[data-page="settings"]');
-  await page.click('.nav-item[data-page="assistant"]');
+  await page.click('.nav-item[data-nav="workspace"]'); await page.click('.ws-tab[data-page="assistant"]');
   await waitAssistantConfig(page, expected);
 }
 
@@ -1132,13 +1132,15 @@ async function runStageE(electronApp, mock, pageErrors) {
 async function runStageF(electronApp, mock, pageErrors) {
   const page = await openStagePage(electronApp, pageErrors);
   const now = new Date();
-  await page.click('.nav-item[data-page="assistant"]');
+  await page.click('.nav-item[data-nav="workspace"]'); await page.click('.ws-tab[data-page="assistant"]');
   await waitAssistantConfig(page, 'ready');
 
-  const navOrder = await page.evaluate(() => [...document.querySelectorAll('.sidebar-bottom .nav-item[data-page]')].map(button => button.dataset.page));
-  assert(navOrder.join(',') === 'assistant,settings', `侧边栏底部导航顺序不正确：${navOrder.join(',')}`);
+  const sideNav = await page.evaluate(() => [...document.querySelectorAll('.sidebar-bottom .nav-item[data-page]')].map(button => button.dataset.page));
+  assert(sideNav.join(',') === 'settings', `侧边栏底部应只剩设置：${sideNav.join(',')}`);
+  const tabOrder = await page.evaluate(() => [...document.querySelectorAll('#workspaceTabs .ws-tab')].map(button => button.dataset.page));
+  assert(tabOrder.join(',') === 'today,assignments,activities,habits,overdue,assistant', `工作台标签顺序不正确：${tabOrder.join(',')}`);
   const navInfo = await page.evaluate(() => {
-    const button = document.querySelector('.sidebar-bottom .nav-item[data-page="assistant"]');
+    const button = document.querySelector('#workspaceTabs .ws-tab[data-page="assistant"]');
     return { text: button.innerText.trim(), hasCount: Boolean(button.querySelector('.nav-count')) };
   });
   assert(navInfo.text === '助手' && navInfo.hasCount === false, `助手入口文案或角标不正确：${JSON.stringify(navInfo)}`);
@@ -1561,7 +1563,7 @@ async function runStageF(electronApp, mock, pageErrors) {
     input: document.querySelector('#assistantInput').value
   }));
   assert(repeatedBefore39.records >= 1, `重复点击前应存在操作记录，实际 ${repeatedBefore39.records}`);
-  await page.click('.nav-item[data-page="assistant"]');
+  await page.click('.nav-item[data-nav="workspace"]'); await page.click('.ws-tab[data-page="assistant"]');
   const repeatedAfter39 = await page.evaluate(() => ({
     records: document.querySelectorAll('.assistant-record').length,
     answer: document.querySelector('.assistant-answer')?.innerText || '',
@@ -1573,7 +1575,7 @@ async function runStageF(electronApp, mock, pageErrors) {
 
   await assistantInput(page, '保留的输入');
   await page.click('.nav-item[data-page="settings"]');
-  await page.click('.nav-item[data-page="assistant"]');
+  await page.click('.nav-item[data-nav="workspace"]'); await page.click('.ws-tab[data-page="assistant"]');
   await waitAssistantConfig(page, 'ready');
   const keptInput39 = await page.evaluate(() => document.querySelector('#assistantInput').value);
   assert(keptInput39 === '保留的输入', `离开页面后输入应保留：${keptInput39}`);
@@ -1585,7 +1587,7 @@ async function runStageF(electronApp, mock, pageErrors) {
     rows: document.querySelectorAll('#assistantResult .assistant-row[data-row-id]').length,
     input: document.querySelector('#assistantInput').value
   }));
-  await page.click('.nav-item[data-page="assistant"]');
+  await page.click('.nav-item[data-nav="workspace"]'); await page.click('.ws-tab[data-page="assistant"]');
   const previewAfterRepeat39 = await page.evaluate(() => ({
     rows: document.querySelectorAll('#assistantResult .assistant-row[data-row-id]').length,
     input: document.querySelector('#assistantInput').value,
@@ -1600,7 +1602,7 @@ async function runStageF(electronApp, mock, pageErrors) {
     records: document.querySelectorAll('.assistant-record').length
   }));
   assert(cleared39.result === '' && cleared39.records === 0, `离开页面应清空预览与记录：${JSON.stringify(cleared39)}`);
-  await page.click('.nav-item[data-page="assistant"]');
+  await page.click('.nav-item[data-nav="workspace"]'); await page.click('.ws-tab[data-page="assistant"]');
   await waitAssistantConfig(page, 'ready');
   const restored39 = await page.evaluate(() => ({
     placeholder: document.querySelector('#assistantResult').innerText.includes('提交后会在这里显示预览或答复。'),
@@ -1636,7 +1638,7 @@ async function runStageF(electronApp, mock, pageErrors) {
     records: document.querySelectorAll('.assistant-record').length
   }));
   assert(late39.result === '' && late39.records === 0, `晚到响应不应写回页面：${JSON.stringify(late39)}`);
-  await page.click('.nav-item[data-page="assistant"]');
+  await page.click('.nav-item[data-nav="workspace"]'); await page.click('.ws-tab[data-page="assistant"]');
   await waitAssistantConfig(page, 'ready');
   const lateBack39 = await page.evaluate(() => ({
     placeholder: document.querySelector('#assistantResult').innerText.includes('提交后会在这里显示预览或答复。'),
@@ -1658,7 +1660,7 @@ async function runStageF(electronApp, mock, pageErrors) {
     document.querySelector('.nav-item[data-page="settings"]').click();
   });
   await pollAssistant(async () => (await itemsOf(page)).length > itemsBeforeBulk39, 5000);
-  await page.click('.nav-item[data-page="assistant"]');
+  await page.click('.nav-item[data-nav="workspace"]'); await page.click('.ws-tab[data-page="assistant"]');
   await pollAssistant(async () => (await page.innerText('#assistantResult')).includes('正在处理…'), 5000);
   const duringExecute39 = await page.evaluate(() => ({
     inputDisabled: document.querySelector('#assistantInput').disabled,
@@ -1876,7 +1878,7 @@ async function runStageF(electronApp, mock, pageErrors) {
 async function runStageG(electronApp, mock, pageErrors) {
   const page = await openStagePage(electronApp, pageErrors);
   await mock.resetMock();
-  await page.click('.nav-item[data-page="assistant"]');
+  await page.click('.nav-item[data-nav="workspace"]'); await page.click('.ws-tab[data-page="assistant"]');
   await waitAssistantConfig(page, 'ready');
   await waitAssistantText(page, '#assistantResult', '提交后会在这里显示预览或答复。');
   const restarted51 = await page.evaluate(() => ({
@@ -1948,7 +1950,7 @@ async function runStageG(electronApp, mock, pageErrors) {
   assert(ai44.keyMask === NEW_KEY_MASK && ai44.configured === true && ai44.endpoint === mockEndpoint && ai44.model === model, `保存新 Key 后配置不正确：${JSON.stringify(ai44)}`);
   assert(mock.requests.length === 0, '保存新 Key 不得发起模型请求');
 
-  await page.click('.nav-item[data-page="assistant"]');
+  await page.click('.nav-item[data-nav="workspace"]'); await page.click('.ws-tab[data-page="assistant"]');
   await waitAssistantConfig(page, 'ready');
   const warning44 = await page.evaluate(() => ({
     config: document.querySelector('#assistantConfigWarning').dataset.config,
@@ -1980,7 +1982,7 @@ async function runStageG(electronApp, mock, pageErrors) {
   const ai45 = await readAi(page);
   assert(ai45.configured === false && ai45.endpoint === mockEndpoint && ai45.keyMask === NEW_KEY_MASK, `空模型保存后配置不正确：${JSON.stringify(ai45)}`);
 
-  await page.click('.nav-item[data-page="assistant"]');
+  await page.click('.nav-item[data-nav="workspace"]'); await page.click('.ws-tab[data-page="assistant"]');
   await waitAssistantConfig(page, 'missing');
   const warning45 = await page.evaluate(() => ({
     config: document.querySelector('#assistantConfigWarning').dataset.config,
@@ -1994,7 +1996,7 @@ async function runStageG(electronApp, mock, pageErrors) {
   await page.fill('#aiModelInput', model);
   await page.click('#aiSettingsSave');
   await waitSettingsReady(page);
-  await page.click('.nav-item[data-page="assistant"]');
+  await page.click('.nav-item[data-nav="workspace"]'); await page.click('.ws-tab[data-page="assistant"]');
   await waitAssistantConfig(page, 'ready');
   const warning45b = await page.evaluate(() => ({
     config: document.querySelector('#assistantConfigWarning').dataset.config,

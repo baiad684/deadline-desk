@@ -26,7 +26,7 @@ const dataDir = path.join(projectDir, 'test-output', 'debug-data');
 
   const debug = await page.evaluate(() => ({
     modalOpen: document.querySelector('#itemModal').classList.contains('open'),
-    activeNav: document.querySelector('.nav-item.active')?.dataset.page,
+    activeNav: document.querySelector('.ws-tab.active')?.dataset.page,
     activePage: document.querySelector('.page.active')?.dataset.pageView,
     activityCount: document.querySelector('#activityCount')?.textContent,
     activityListHTML: document.querySelector('#activityList')?.innerHTML.slice(0, 300),

@@ -16,22 +16,13 @@
       </div>
 
       <nav class="main-nav" aria-label="主导航">
-        <button class="nav-item active" data-page="today"><span data-icon="sun"></span><span>今天</span><span class="nav-count" id="todayCount">0</span></button>
+        <button class="nav-item active" data-nav="workspace"><span data-icon="sun"></span><span>工作台</span></button>
         <button class="nav-item" data-page="diary"><span data-icon="diary"></span><span>日记</span></button>
-        <button class="nav-item" data-page="habits"><span data-icon="repeat"></span><span>日常</span><span class="nav-count" id="habitCount">0</span></button>
-        <button class="nav-item" data-page="assignments"><span data-icon="book"></span><span>大作业</span><span class="nav-count" id="assignmentCount">0</span></button>
-        <button class="nav-item" data-page="activities"><span data-icon="ticket"></span><span>活动</span><span class="nav-count" id="activityCount">0</span></button>
-        <button class="nav-item" data-page="overdue"><span data-icon="warning"></span><span>逾期</span><span class="nav-count overdue-count" id="overdueCount">0</span></button>
         <button class="nav-item" data-page="stats"><span data-icon="chart"></span><span>统计</span></button>
       </nav>
 
       <div class="sidebar-bottom">
-        <button class="nav-item" data-page="assistant"><span data-icon="assistant"></span><span>助手</span></button>
         <button class="nav-item" data-page="settings"><span data-icon="settings"></span><span>设置</span></button>
-        <div class="storage-summary">
-          <span>本地数据</span>
-          <strong id="storageSummary">0 条记录 · 0 个附件</strong>
-        </div>
       </div>
     </aside>
 
@@ -43,9 +34,26 @@
           <kbd>Ctrl K</kbd>
         </label>
         <div class="top-actions">
+          <div class="new-menu" id="newMenu">
+            <button type="button" class="primary-button" id="newMenuButton" aria-haspopup="menu" aria-expanded="false"><span data-icon="plus"></span>新增<span class="new-menu-caret" data-icon="down"></span></button>
+            <div class="new-menu-list hidden" id="newMenuList" role="menu" aria-label="新增">
+              <button type="button" role="menuitem" data-new="assignment"><span data-icon="book"></span>大作业</button>
+              <button type="button" role="menuitem" data-new="activity"><span data-icon="ticket"></span>活动</button>
+              <button type="button" role="menuitem" data-new="habit"><span data-icon="repeat"></span>日常任务</button>
+            </div>
+          </div>
           <button class="icon-button" id="notificationButton" title="通知状态" aria-label="通知状态"><span data-icon="bell"></span></button>
         </div>
       </header>
+
+      <nav class="ws-tabs" id="workspaceTabs" aria-label="工作台视图">
+        <button class="ws-tab active" data-page="today"><span>今天</span><span class="nav-count" id="todayCount">0</span></button>
+        <button class="ws-tab" data-page="assignments"><span>大作业</span><span class="nav-count" id="assignmentCount">0</span></button>
+        <button class="ws-tab" data-page="activities"><span>活动</span><span class="nav-count" id="activityCount">0</span></button>
+        <button class="ws-tab" data-page="habits"><span>日常</span><span class="nav-count" id="habitCount">0</span></button>
+        <button class="ws-tab" data-page="overdue"><span>已逾期</span><span class="nav-count overdue-count" id="overdueCount">0</span></button>
+        <button class="ws-tab" data-page="assistant"><span data-icon="assistant"></span><span>助手</span></button>
+      </nav>
 
       <div class="page-container">
         <section class="page active" data-page-view="today">
@@ -291,6 +299,7 @@
             </section>
             <section class="settings-group panel">
               <header class="panel-header"><div><h2>本地数据</h2><span>仅保存在这台电脑</span></div></header>
+              <div class="setting-row"><div><strong>数据概览</strong><p id="storageSummary">0 条记录 · 0 个附件</p></div></div>
               <div class="data-path"><span data-icon="folder"></span><div><strong>应用数据目录</strong><code id="dataPath">正在读取...</code></div><button class="icon-button" id="openDataFolderButton" title="打开数据目录" aria-label="打开数据目录"><span data-icon="external"></span></button></div>
               <div class="danger-zone"><div><strong>清空全部数据</strong><p>永久删除所有事项、附件和日记，此操作只能通过已有备份恢复。</p></div><button class="danger-button" id="clearDataButton"><span data-icon="trash"></span>清空数据</button></div>
             </section>

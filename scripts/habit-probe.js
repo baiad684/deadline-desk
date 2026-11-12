@@ -71,7 +71,7 @@ async function seedHistory(dataDir) {
     await page.locator('[data-page="habits"]').waitFor();
     await page.locator('[data-page="today"]').click();
     assert(await page.locator('#habitCardPanel').evaluate(el => el.classList.contains('hidden')), '无任务时今日打卡卡片应隐藏');
-    await page.locator('[data-page="habits"]').click();
+    await page.locator('.nav-item[data-nav="workspace"]').click(); await page.locator('.ws-tab[data-page="habits"]').click();
     await page.getByText('还没有日常任务').waitFor();
 
     // 2. 新建两个任务
@@ -105,7 +105,7 @@ async function seedHistory(dataDir) {
     assert(await page.locator('#habitCardCaption').textContent() === '已打卡 2 / 2', '全部完成后计数错误');
 
     // 5. 补卡：任务一补昨天
-    await page.locator('[data-page="habits"]').click();
+    await page.locator('.nav-item[data-nav="workspace"]').click(); await page.locator('.ws-tab[data-page="habits"]').click();
     const yesterday = localDate(-1);
     await page.locator('.habit-row').first().locator(`.habit-dot[data-date="${yesterday}"]`).click();
     await page.waitForFunction(() => document.querySelector('.habit-row .habit-total')?.textContent === '累计 2 天');
@@ -192,19 +192,19 @@ async function seedHistory(dataDir) {
     const neutralClass = await yesterdayCell.getAttribute('class');
     assert(!neutralClass.includes('level-'), `昨天格子应为中性（创建前补卡不计入），实际 ${neutralClass}`);
     // 取消今天打卡 → level-0 / 0%；恢复 → 50%
-    await page.locator('[data-page="habits"]').click();
+    await page.locator('.nav-item[data-nav="workspace"]').click(); await page.locator('.ws-tab[data-page="habits"]').click();
     await page.locator('.habit-row').first().locator('[data-habit-toggle]').click();
     await page.locator('[data-page="stats"]').click();
     await page.waitForFunction(() => document.querySelector('#habitMonthRate')?.textContent === '0%', null, { timeout: 8000 });
     const cancelledClass = await page.locator('#habitCalendarGrid .habit-day.today').getAttribute('class');
     assert(cancelledClass.includes('level-0'), `取消后今天格子应为 level-0，实际 ${cancelledClass}`);
-    await page.locator('[data-page="habits"]').click();
+    await page.locator('.nav-item[data-nav="workspace"]').click(); await page.locator('.ws-tab[data-page="habits"]').click();
     await page.locator('.habit-row').first().locator('[data-habit-toggle]').click();
     await page.locator('[data-page="stats"]').click();
     await page.waitForFunction(() => document.querySelector('#habitMonthRate')?.textContent === '50%', null, { timeout: 8000 });
 
     // 9. 删除（连同打卡记录）
-    await page.locator('[data-page="habits"]').click();
+    await page.locator('.nav-item[data-nav="workspace"]').click(); await page.locator('.ws-tab[data-page="habits"]').click();
     await page.locator('.habit-row').nth(1).locator('[data-habit-delete]').click();
     await page.locator('#confirmModal.open').waitFor();
     await page.locator('#confirmAccept').click();
@@ -223,7 +223,7 @@ async function seedHistory(dataDir) {
     const page = await electronApp.firstWindow();
     page.on('pageerror', error => pageErrors.push(error.message));
     await page.waitForLoadState('domcontentloaded');
-    await page.locator('[data-page="habits"]').click();
+    await page.locator('.nav-item[data-nav="workspace"]').click(); await page.locator('.ws-tab[data-page="habits"]').click();
     await page.locator('.habit-row').first().waitFor();
     assert(await page.locator('.habit-row').count() === 1, '重启后应剩 1 个任务');
     assert(await page.locator('.habit-row.checked').count() === 1, '小组件端的打卡状态应持久化');

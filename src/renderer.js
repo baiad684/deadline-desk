@@ -20,6 +20,7 @@ const icons = {
   upload: '<path d="M17 8l-5-5-5 5M12 3v12M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>',
   left: '<path d="m15 18-6-6 6-6"/>',
   right: '<path d="m9 18 6-6-6-6"/>',
+  down: '<path d="m6 9 6 6 6-6"/>',
   diary: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 3v18"/><path d="M12 8h5M12 12h5"/>',
   repeat: '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
   folder: '<path d="M3 5h6l2 2h10v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
@@ -41,9 +42,13 @@ const ASSISTANT_DEFAULT_PLACEHOLDER = '提交后会在这里显示预览或答�
 const ASSISTANT_LOADING_TEXT = '正在处理…';
 const ASSISTANT_SUMMARY_LIMIT = 100;
 
+// 工作台内的页面（标签栏所含）；其余页面（日记 / 统计 / 设置）独占整个内容区
+const WORKSPACE_PAGES = ['today', 'assignments', 'activities', 'habits', 'overdue', 'assistant'];
+
 const state = {
   items: [],
   currentPage: 'today',
+  lastWorkspacePage: 'today',
   assignmentFilter: 'all',
   activityFilter: 'all',
   search: '',
@@ -830,12 +835,20 @@ function switchPage(page) {
   if (previous === 'diary' && page !== 'diary') flushDiarySave();
   if (previous === 'assistant' && page !== 'assistant') leaveAssistantPage();
   state.currentPage = page;
+  const inWorkspace = WORKSPACE_PAGES.includes(page);
+  if (inWorkspace) state.lastWorkspacePage = page;
   $$('.nav-item[data-page]').forEach(button => {
     const active = button.dataset.page === page;
     button.classList.toggle('active', active);
     if (active) button.setAttribute('aria-current', 'page');
     else button.removeAttribute('aria-current');
   });
+  const workspaceNav = $('.nav-item[data-nav="workspace"]');
+  workspaceNav.classList.toggle('active', inWorkspace);
+  if (inWorkspace) workspaceNav.setAttribute('aria-current', 'page');
+  else workspaceNav.removeAttribute('aria-current');
+  $('#workspaceTabs').classList.toggle('hidden', !inWorkspace);
+  $$('.ws-tab').forEach(tab => tab.classList.toggle('active', tab.dataset.page === page));
   $$('.page').forEach(view => view.classList.toggle('active', view.dataset.pageView === page));
   $('#searchBox').classList.toggle('hidden', page === 'settings' || page === 'diary' || page === 'habits' || page === 'assistant');
   if (page === 'diary') enterDiaryPage();
@@ -2162,6 +2175,34 @@ async function initializeSettings() {
 
 function bindEvents() {
   $$('.nav-item[data-page]').forEach(button => button.addEventListener('click', () => switchPage(button.dataset.page)));
+  $$('.ws-tab').forEach(tab => tab.addEventListener('click', () => switchPage(tab.dataset.page)));
+  $('.nav-item[data-nav="workspace"]').addEventListener('click', () => switchPage(state.lastWorkspacePage));
+
+  // 顶栏全局「新增」下拉：菜单项复用各页原有的新增入口，不新增业务逻辑
+  const setNewMenuOpen = open => {
+    $('#newMenuList').classList.toggle('hidden', !open);
+    $('#newMenuButton').setAttribute('aria-expanded', String(open));
+  };
+  $('#newMenuButton').addEventListener('click', () => {
+    setNewMenuOpen($('#newMenuList').classList.contains('hidden'));
+  });
+  $('#newMenuList').addEventListener('click', event => {
+    const entry = event.target.closest('[data-new]');
+    if (!entry) return;
+    setNewMenuOpen(false);
+    // 菜单项收起后不可见，先把焦点交给按钮，弹窗关闭时才有可回落的触发元素
+    $('#newMenuButton').focus();
+    if (entry.dataset.new === 'habit') openHabitModal();
+    else openItemModal(entry.dataset.new);
+  });
+  document.addEventListener('click', event => {
+    if (!event.target.closest('#newMenu')) setNewMenuOpen(false);
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || $('#newMenuList').classList.contains('hidden')) return;
+    setNewMenuOpen(false);
+    $('#newMenuButton').focus();
+  });
   $$('.new-kind-button').forEach(button => button.addEventListener('click', () => openItemModal(button.dataset.kind)));
   $$('.kind-segment button').forEach(button => button.addEventListener('click', () => setModalKind(button.dataset.kind)));
   $('#deadlineChips').addEventListener('click', event => {
@@ -2414,7 +2455,7 @@ async function initialize() {
   mountIcons();
   updateCurrentDate();
   bindEvents();
-  $$('.nav-item[data-page]').forEach(button => {
+  $$('.nav-item').forEach(button => {
     if (button.classList.contains('active')) button.setAttribute('aria-current', 'page');
   });
   await Promise.all([refreshItems(), initializeSettings(), refreshHabits()]);

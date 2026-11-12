@@ -3470,10 +3470,14 @@ describe('助手后端单元测试（detail_v1）', () => {
       return match[0];
     };
 
-    test('F19.1 侧边栏：助手导航位于设置之上，无角标且文案为「助手」', () => {
+    test('F19.1 工作台标签：助手位于标签栏末尾，无角标且文案为「助手」；侧边栏底部只剩设置', () => {
       const pages = [...sidebarBottom.matchAll(/<button class="nav-item" data-page="([a-z]+)"/g)].map(match => match[1]);
-      assert.deepEqual(pages, ['assistant', 'settings']);
-      const assistantNav = sidebarBottom.match(/<button class="nav-item" data-page="assistant">([\s\S]*?)<\/button>/)[1];
+      assert.deepEqual(pages, ['settings']);
+      const tabStart = html.indexOf('<nav class="ws-tabs"');
+      const tabBar = html.slice(tabStart, html.indexOf('</nav>', tabStart));
+      const tabs = [...tabBar.matchAll(/<button class="ws-tab[^"]*" data-page="([a-z]+)"/g)].map(match => match[1]);
+      assert.deepEqual(tabs, ['today', 'assignments', 'activities', 'habits', 'overdue', 'assistant']);
+      const assistantNav = tabBar.match(/<button class="ws-tab" data-page="assistant">([\s\S]*?)<\/button>/)[1];
       assert.ok(assistantNav.includes('data-icon="assistant"'));
       assert.ok(assistantNav.includes('助手'));
       assert.ok(!assistantNav.includes('nav-count'), '助手导航不应带角标');
@@ -4357,14 +4361,15 @@ describe('助手后端单元测试（detail_v1）', () => {
     });
   });
 
-  // ============ F22 需求文档 v1.15 ============
+  // ============ F22 需求文档 v1.15（v1.16 接口协议已并入） ============
 
   describe('F22 需求文档 v1.15', () => {
     const doc = fs.readFileSync(path.join(projectDir, 'docs/需求文档.md'), 'utf8');
 
-    test('F22.1 v1.15 版本行', () => {
-      assert.ok(doc.split(/\r?\n/)[0].includes('# 「截止线」· 需求文档（v1.15'), '标题应升级到 v1.15');
-      assert.ok(doc.includes('更新日期：2026-11-07（v1.15'), '更新日期应写明 v1.15');
+    test('F22.1 版本行：助手 v1.15 已并入当前 v1.16', () => {
+      assert.ok(doc.split(/\r?\n/)[0].includes('# 「截止线」· 需求文档（v1.16'), '标题应升级到 v1.16');
+      assert.ok(doc.includes('更新日期：2026-11-08（v1.16'), '更新日期应写明 v1.16');
+      assert.ok(doc.includes('v1.15：新增「助手」页'), '更新日期应保留 v1.15 助手说明');
     });
 
     test('F22.2 模块 7、导航与离线表述', () => {

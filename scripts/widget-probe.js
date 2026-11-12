@@ -64,7 +64,7 @@ async function assertWidgetJump(electronApp, widgetPage, mainPage, title, pageId
     const modal = document.querySelector('#itemDetailModal');
     return modal?.getAttribute('aria-hidden') === 'false'
       && document.querySelector('#detailTitle')?.textContent.trim() === title
-      && document.querySelector(`.nav-item[data-page="${pageId}"]`)?.classList.contains('active');
+      && document.querySelector(`.ws-tab[data-page="${pageId}"]`)?.classList.contains('active');
   }, { title, pageId }, { timeout: 15000, polling: 100 });
 
   assert(await mainWindowVisible(electronApp), '跳转后主窗口未显示');
@@ -153,7 +153,7 @@ async function dragWidgetBy(widgetPage, dx, dy) {
     assert(after.pinPressed === 'false', '默认应为不置顶');
 
     // 小组件点击事项：主窗口显示、落到大作业页并打开详情，搜索与筛选复位
-    await mainPage.locator('.nav-item[data-page="assignments"]').click();
+    await mainPage.locator('.ws-tab[data-page="assignments"]').click();
     await mainPage.locator('#assignmentFilters [data-filter="not_started"]').click();
     await mainPage.locator('#searchInput').fill('不存在的关键词');
     await hideMainWindow(electronApp);
@@ -170,7 +170,7 @@ async function dragWidgetBy(widgetPage, dx, dy) {
     assert(await mainWindowVisible(electronApp), '跳转后主窗口未显示');
     assert(await mainPage.locator('#detailTitle').textContent() === '探针测试事项', '详情标题不正确');
     assert(await mainPage.locator('#detailBackButton').evaluate(el => el.classList.contains('hidden')), '小组件来源应隐藏返回键');
-    assert(await mainPage.locator('.nav-item[data-page="assignments"]').evaluate(el => el.classList.contains('active')), '未落在大作业页');
+    assert(await mainPage.locator('.ws-tab[data-page="assignments"]').evaluate(el => el.classList.contains('active')), '未落在大作业页');
     assert(await mainPage.locator('#searchInput').inputValue() === '', '跳转后搜索未清空');
     assert(await mainPage.locator('#assignmentFilters [data-filter="all"]').getAttribute('aria-pressed') === 'true', '大作业筛选未重置为全部');
 
@@ -211,7 +211,7 @@ async function dragWidgetBy(widgetPage, dx, dy) {
       () => document.querySelector('#itemDetailModal')?.getAttribute('aria-hidden') === 'true',
       null, { timeout: 5000, polling: 100 }
     );
-    await mainPage.locator('.nav-item[data-page="today"]').click();
+    await mainPage.locator('.ws-tab[data-page="today"]').click();
     await mainPage.locator('[data-page-view="today"]').waitFor({ state: 'visible' });
 
     // 主窗口今天页删除该事项，小组件角标应实时归零；主窗口今天列表同时落到空态
@@ -230,7 +230,7 @@ async function dragWidgetBy(widgetPage, dx, dy) {
     await mainPage.locator('#itemModal').waitFor({ state: 'hidden' });
 
     // 活动必须从活动页「新增活动」入口创建
-    await mainPage.locator('.nav-item[data-page="activities"]').click();
+    await mainPage.locator('.ws-tab[data-page="activities"]').click();
     await mainPage.locator('.new-kind-button[data-kind="activity"]').click();
     await mainPage.locator('#itemTitle').fill('探针活动事项');
     await mainPage.locator('#itemDeadlineDate').fill(dateInDays(3).slice(0, 10));
@@ -248,7 +248,7 @@ async function dragWidgetBy(widgetPage, dx, dy) {
     await assertWidgetJump(electronApp, widgetPage, mainPage, '探针活动事项', 'activities');
 
     // 当天待办 → 详情 → 返回：确认详情来源切换与 aria-hidden 配对未回归
-    await mainPage.locator('.nav-item[data-page="today"]').click();
+    await mainPage.locator('.ws-tab[data-page="today"]').click();
     await mainPage.locator('#weekStrip .week-day.has-item').first().waitFor({ timeout: 8000 });
     await mainPage.locator('#weekStrip .week-day.has-item').first().click();
     await mainPage.locator('#dayItemsModal.open').waitFor();
