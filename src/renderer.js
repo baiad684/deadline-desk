@@ -44,7 +44,7 @@ const ASSISTANT_LOADING_TEXT = '正在处理…';
 const ASSISTANT_SUMMARY_LIMIT = 100;
 
 // 工作台内的页面（标签栏所含）；其余页面（日记 / 统计 / 设置）独占整个内容区
-const WORKSPACE_PAGES = ['today', 'assignments', 'activities', 'habits', 'overdue', 'assistant'];
+const WORKSPACE_PAGES = ['today', 'assignments', 'activities', 'overdue', 'assistant'];
 
 const state = {
   items: [],
@@ -866,7 +866,7 @@ function switchPage(page) {
   $('#workspaceTabs').classList.toggle('hidden', !inWorkspace);
   $$('.ws-tab').forEach(tab => tab.classList.toggle('active', tab.dataset.page === page));
   $$('.page').forEach(view => view.classList.toggle('active', view.dataset.pageView === page));
-  $('#searchBox').classList.toggle('hidden', page === 'settings' || page === 'diary' || page === 'habits' || page === 'assistant');
+  $('#searchBox').classList.toggle('hidden', page === 'settings' || page === 'diary' || page === 'assistant');
   if (page === 'diary') enterDiaryPage();
   if (page === 'assistant' && previous !== 'assistant') enterAssistantPage();
 }

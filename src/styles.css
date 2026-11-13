@@ -371,6 +371,13 @@ kbd { padding: 2px 5px; border: 1px solid var(--line-300); border-bottom-width: 
 #diaryDeleteButton:disabled { opacity: .45; cursor: default; transform: none; }
 
 .habit-progress-panel { padding: 15px 17px 17px; }
+.habit-strip { margin-bottom: var(--space-4); overflow: hidden; }
+.habit-strip-actions { display: flex; align-items: center; gap: var(--space-3); }
+.habit-strip .habit-progress-panel { padding: var(--space-4) var(--space-4) 0; }
+.habit-strip .habit-list { margin: 0; padding: var(--space-3) var(--space-4) var(--space-4); }
+.habit-strip .habit-archived { margin-top: 0; padding: 0 var(--space-4) var(--space-4); }
+.habit-strip .habit-empty { margin: 0; border: 0; box-shadow: none; }
+.habit-strip .empty-state { min-height: 0; padding: var(--space-4); }
 .habit-progress-copy { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; color: var(--ink-500); font-size: 12px; }
 .habit-progress-copy strong { color: var(--ink-900); font-size: 16px; font-weight: 650; font-variant-numeric: tabular-nums; }
 .habit-progress-track { height: 8px; overflow: hidden; border-radius: 4px; background: var(--line-100); }

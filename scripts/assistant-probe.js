@@ -1138,7 +1138,7 @@ async function runStageF(electronApp, mock, pageErrors) {
   const sideNav = await page.evaluate(() => [...document.querySelectorAll('.sidebar-bottom .nav-item[data-page]')].map(button => button.dataset.page));
   assert(sideNav.join(',') === 'settings', `侧边栏底部应只剩设置：${sideNav.join(',')}`);
   const tabOrder = await page.evaluate(() => [...document.querySelectorAll('#workspaceTabs .ws-tab')].map(button => button.dataset.page));
-  assert(tabOrder.join(',') === 'today,assignments,activities,habits,overdue,assistant', `工作台标签顺序不正确：${tabOrder.join(',')}`);
+  assert(tabOrder.join(',') === 'today,assignments,activities,overdue,assistant', `工作台标签顺序不正确：${tabOrder.join(',')}`);
   const navInfo = await page.evaluate(() => {
     const button = document.querySelector('#workspaceTabs .ws-tab[data-page="assistant"]');
     return { text: button.innerText.trim(), hasCount: Boolean(button.querySelector('.nav-count')) };

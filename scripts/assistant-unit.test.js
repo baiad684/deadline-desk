@@ -3476,7 +3476,7 @@ describe('助手后端单元测试（detail_v1）', () => {
       const tabStart = html.indexOf('<nav class="ws-tabs"');
       const tabBar = html.slice(tabStart, html.indexOf('</nav>', tabStart));
       const tabs = [...tabBar.matchAll(/<button class="ws-tab[^"]*" data-page="([a-z]+)"/g)].map(match => match[1]);
-      assert.deepEqual(tabs, ['today', 'assignments', 'activities', 'habits', 'overdue', 'assistant']);
+      assert.deepEqual(tabs, ['today', 'assignments', 'activities', 'overdue', 'assistant']);
       const assistantNav = tabBar.match(/<button class="ws-tab" data-page="assistant">([\s\S]*?)<\/button>/)[1];
       assert.ok(assistantNav.includes('data-icon="assistant"'));
       assert.ok(assistantNav.includes('助手'));

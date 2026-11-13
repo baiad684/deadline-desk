@@ -50,7 +50,6 @@
         <button class="ws-tab active" data-page="today"><span>今天</span><span class="nav-count" id="todayCount">0</span></button>
         <button class="ws-tab" data-page="assignments"><span>大作业</span><span class="nav-count" id="assignmentCount">0</span></button>
         <button class="ws-tab" data-page="activities"><span>活动</span><span class="nav-count" id="activityCount">0</span></button>
-        <button class="ws-tab" data-page="habits"><span>日常</span><span class="nav-count" id="habitCount">0</span></button>
         <button class="ws-tab" data-page="overdue"><span>已逾期</span><span class="nav-count overdue-count" id="overdueCount">0</span></button>
         <button class="ws-tab" data-page="assistant"><span data-icon="assistant"></span><span>助手</span></button>
       </nav>
@@ -108,6 +107,18 @@
             <div><h1>活动</h1><p>记录已经决定参加的活动和报名截止日期。</p></div>
             <button class="primary-button new-kind-button" data-kind="activity"><span data-icon="plus"></span>新增活动</button>
           </div>
+          <section class="panel habit-strip" id="habitStrip">
+            <header class="panel-header"><div><h2>每日打卡</h2><span>日常任务：没有截止日期，不进逾期，不计入截止统计</span></div><div class="habit-strip-actions"><span class="nav-count" id="habitCount">0</span><button type="button" class="secondary-button" id="newHabitButton"><span data-icon="plus"></span>新增任务</button></div></header>
+            <div class="habit-progress-panel">
+              <div class="habit-progress-copy"><span>今日打卡进度</span><strong id="habitProgressLabel">0 / 0</strong></div>
+              <div class="habit-progress-track"><div class="habit-progress-fill" id="habitProgressFill"></div></div>
+            </div>
+            <div class="habit-list" id="habitList"></div>
+            <div class="habit-archived hidden" id="habitArchivedSection">
+              <button type="button" class="habit-archived-toggle" id="habitArchivedToggle">已归档（0）</button>
+              <div class="habit-archived-list hidden" id="habitArchivedList"></div>
+            </div>
+          </section>
           <div class="list-toolbar">
             <div class="segmented" id="activityFilters">
               <button class="active" data-filter="all" aria-pressed="true">全部</button><button data-filter="not_completed" aria-pressed="false">未完成</button><button data-filter="completed" aria-pressed="false">已完成</button>
@@ -207,22 +218,6 @@
                 <button class="danger-button" id="diaryDeleteButton"><span data-icon="trash"></span>删除日记</button>
               </footer>
             </section>
-          </div>
-        </section>
-
-        <section class="page" data-page-view="habits">
-          <div class="page-heading list-heading">
-            <div><h1>日常任务</h1><p>每天都要做的小事，做完就打卡，断不了的就成习惯。</p></div>
-            <button class="primary-button" id="newHabitButton"><span data-icon="plus"></span>新增任务</button>
-          </div>
-          <div class="panel habit-progress-panel">
-            <div class="habit-progress-copy"><span>今日打卡进度</span><strong id="habitProgressLabel">0 / 0</strong></div>
-            <div class="habit-progress-track"><div class="habit-progress-fill" id="habitProgressFill"></div></div>
-          </div>
-          <div class="habit-list" id="habitList"></div>
-          <div class="habit-archived hidden" id="habitArchivedSection">
-            <button type="button" class="habit-archived-toggle" id="habitArchivedToggle">已归档（0）</button>
-            <div class="habit-archived-list hidden" id="habitArchivedList"></div>
           </div>
         </section>
 
