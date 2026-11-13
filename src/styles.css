@@ -558,6 +558,10 @@ kbd { padding: 2px 5px; border: 1px solid var(--line-300); border-bottom-width: 
 .day-item-copy span { margin-top: 5px; color: var(--ink-500); font-size: 12px; }
 .day-item-arrow { color: var(--ink-400); }
 .item-detail-dialog { grid-template-rows: auto minmax(0, 1fr) auto; }
+/* UI 重设计阶段 5a：事项详情改为右侧抽屉（仅样式；aria-hidden、焦点栈和各 id 不变） */
+.detail-backdrop { padding: 0; place-items: stretch end; }
+.detail-backdrop.open > .item-detail-dialog { width: min(480px, 100vw); height: 100%; max-height: 100vh; border-width: 0 0 0 1px; border-radius: 0; animation: drawer-in .24s var(--ease); }
+@keyframes drawer-in { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
 .detail-footer { min-height: 56px; padding: 0 19px; }
 .item-detail-dialog .modal-header { gap: 10px; }
 .item-detail-dialog .modal-header > div { min-width: 0; flex: 1; }
