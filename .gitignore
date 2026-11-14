@@ -4,3 +4,8 @@ test-output/
 *.log
 .DS_Store
 .zcode/
+
+# 本地资料，不入库
+docs/briefs/
+docs/平台签到接入设计.md
+reference/
