@@ -279,7 +279,7 @@ kbd { padding: 2px 5px; border: 1px solid var(--line-300); border-bottom-width: 
 
 .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .stats-panel { min-width: 0; }
-.stats-content { min-height: 230px; display: grid; grid-template-columns: 190px 1fr; align-items: center; gap: 20px; padding: 22px; }
+.stats-content { min-height: 200px; display: grid; grid-template-columns: 190px 1fr; align-items: center; gap: 20px; padding: 22px; }
 .donut-wrap { position: relative; width: 160px; height: 160px; display: grid; place-items: center; }
 .donut { width: 150px; height: 150px; transform: rotate(-90deg); }
 .donut circle { fill: none; stroke-width: 12; }
@@ -305,7 +305,7 @@ kbd { padding: 2px 5px; border: 1px solid var(--line-300); border-bottom-width: 
 .activity-numbers span { color: var(--ink-500); font-size: 11px; }
 .activity-numbers strong { margin-top: 6px; font-size: 20px; font-weight: 650; }
 .overview-panel { grid-column: 1 / -1; }
-.risk-list { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 15px; }
+.risk-list { display: grid; gap: 10px; padding: 15px; }
 .risk-item { min-width: 0; padding: 13px; border: 1px solid var(--line-200); border-left: 3px solid var(--primary); border-radius: var(--radius-md); transition: transform .14s var(--ease), box-shadow .14s var(--ease); }
 .risk-item:hover { box-shadow: var(--shadow-pop); }
 .risk-item.danger { border-left-color: var(--danger); background: #fdf7f5; }
@@ -346,6 +346,9 @@ kbd { padding: 2px 5px; border: 1px solid var(--line-300); border-bottom-width: 
 .ai-settings-status[data-ai-status="missing"] { color: var(--warning); background: var(--warning-soft); }
 .ai-settings-actions { display: flex; justify-content: flex-end; padding: 12px 17px 16px; }
 
+/* UI 重设计阶段 6a：日记页编辑区撑满高度（需压过 .page.active 的 display: block） */
+.page.active[data-page-view="diary"] { display: flex; flex-direction: column; }
+[data-page-view="diary"] .diary-layout { flex: 1; min-height: 0; align-items: stretch; }
 .diary-layout { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 16px; align-items: start; }
 .diary-calendar-panel, .diary-editor-panel { overflow: hidden; }
 .diary-month-actions { display: flex; align-items: center; gap: 6px; }
@@ -359,7 +362,7 @@ kbd { padding: 2px 5px; border: 1px solid var(--line-300); border-bottom-width: 
 .diary-cell.today { color: var(--primary-hover); background: var(--primary-100); }
 .diary-cell.selected { color: #fff; background: var(--primary); }
 .diary-cell.selected::after { background: #fff; }
-.diary-editor-panel { display: flex; flex-direction: column; min-height: 480px; }
+.diary-editor-panel { display: flex; flex-direction: column; min-height: 0; }
 .diary-textarea { flex: 1; min-height: 320px; margin: 14px 16px 0; padding: 12px 14px; border: 1px solid var(--line-200); border-radius: var(--radius-md); outline: none; resize: none; color: var(--ink-900); background: var(--surface-2); line-height: 1.7; transition: border-color .15s var(--ease), box-shadow .15s var(--ease), background-color .15s var(--ease); }
 .diary-textarea:hover { border-color: var(--line-400); }
 .diary-textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(13, 110, 97, .14); background: var(--surface); }
